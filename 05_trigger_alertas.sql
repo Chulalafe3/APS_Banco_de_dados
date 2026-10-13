@@ -3,10 +3,10 @@
 -- APS Independente - LPBD (UNIP)
 -- Trigger de segurança: detecção de falhas e alertas em tempo real
 --
--- IMPORTANTE: rode a carga massiva ANTES deste script.
---   CALL sp_gerar_carga_massiva(1, NOW() - INTERVAL '30 days', NOW(), 0.02);
--- Se a trigger já existir durante a carga, ela vai verificar as
--- ~389 mil leituras e gerar milhares de alertas de uma vez.
+-- Rode a carga histórica DEPOIS deste script (ver README):
+--   CALL sp_gerar_historico(1, 3);
+-- Assim cada leitura histórica passa pela trigger, como passaria
+-- em produção, e o banco já nasce com um histórico de alertas real.
 --
 -- O que a trigger faz a cada leitura inserida em telemetria:
 --   1. FALHA DO SENSOR: valor fora da faixa física do aparelho

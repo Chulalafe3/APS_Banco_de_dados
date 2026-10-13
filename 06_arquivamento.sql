@@ -41,7 +41,7 @@ CREATE OR REPLACE PROCEDURE sp_arquivar_telemetria(p_dias INTEGER DEFAULT 30)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_corte   TIMESTAMP := date_trunc('minute', NOW()) - make_interval(days => p_dias);
+    v_corte   TIMESTAMP := date_trunc('minute', LOCALTIMESTAMP) - make_interval(days => p_dias);
     v_inicio  TIMESTAMP := clock_timestamp();
     v_linhas  BIGINT;
     v_ms      NUMERIC(12,2);
@@ -72,38 +72,24 @@ COMMENT ON PROCEDURE sp_arquivar_telemetria(INTEGER) IS
     'Move leituras com mais de p_dias (padrão 30) de telemetria para telemetria_historico e registra em log_arquivamento';
 
 -- ---------------------------------------------------------------------
--- 3. CRIAÇÃO AUTOMÁTICA DAS PARTIÇÕES MENSAIS
---    A telemetria só aceita leituras de meses que têm partição.
---    Esta procedure cria o mês atual + os próximos p_meses.
---    Partições novas herdam o índice e a trigger automaticamente.
+-- 3. CRIAÇÃO AUTOMÁTICA DAS PARTIÇÕES MENSAIS (FUTURAS)
+--    Atalho para sp_criar_particoes_periodo (definida no 01):
+--    cria o mês atual + os próximos p_meses. Rodar 1x por mês
+--    (ou agendar) para nunca faltar partição.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE sp_criar_particoes(p_meses INTEGER DEFAULT 3)
 LANGUAGE plpgsql
 AS $$
-DECLARE
-    v_inicio  DATE;
-    v_fim     DATE;
-    v_nome    TEXT;
 BEGIN
-    FOR i IN 0..p_meses LOOP
-        v_inicio := (date_trunc('month', NOW()) + make_interval(months => i))::DATE;
-        v_fim    := (v_inicio + INTERVAL '1 month')::DATE;
-        v_nome   := 'telemetria_' || to_char(v_inicio, 'YYYY_MM');
-
-        IF to_regclass(v_nome) IS NULL THEN
-            EXECUTE format(
-                'CREATE TABLE %I PARTITION OF telemetria FOR VALUES FROM (%L) TO (%L)',
-                v_nome, v_inicio, v_fim);
-            RAISE NOTICE 'Partição criada: %', v_nome;
-        END IF;
-    END LOOP;
+    CALL sp_criar_particoes_periodo(
+        LOCALTIMESTAMP,
+        LOCALTIMESTAMP + make_interval(months => p_meses));
 END;
 $$;
 
 COMMENT ON PROCEDURE sp_criar_particoes(INTEGER) IS
     'Cria as partições mensais da telemetria para o mês atual e os próximos p_meses (padrão 3)';
 
--- Já garante as partições até janeiro de 2027
 CALL sp_criar_particoes(3);
 
 -- ---------------------------------------------------------------------
@@ -131,10 +117,9 @@ SELECT
     (SELECT COUNT(*) FROM telemetria)           AS atuais,
     (SELECT COUNT(*) FROM telemetria_historico) AS arquivadas;
 
--- 5.2 Se a carga massiva cobriu exatamente 30 dias, ainda não há
---     nada velho o suficiente. Para testar agora, arquive o que tem
---     mais de 20 dias (cerca de 1/3 da carga):
-CALL sp_arquivar_telemetria(20);
+-- 5.2 Arquivamento pela regra da APS (mais de 30 dias).
+--     Com 3 meses de histórico, uns 2 meses vão para o arquivo.
+CALL sp_arquivar_telemetria();
 
 -- 5.3 Depois: os números devem ter mudado, e o total continua igual
 SELECT
@@ -145,7 +130,7 @@ SELECT
 -- 5.4 Registro da execução (linhas movidas e tempo)
 SELECT * FROM log_arquivamento ORDER BY id_execucao DESC;
 
--- 5.5 Uso normal (regra da APS): mais de 30 dias
+-- 5.5 Rodar de novo não move nada (já foi tudo arquivado)
 CALL sp_arquivar_telemetria();
 
 -- 5.6 Partições existentes

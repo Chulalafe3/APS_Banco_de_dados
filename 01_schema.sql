@@ -14,8 +14,8 @@ CREATE TABLE estacoes (
     localizacao         VARCHAR(150),
     latitude            NUMERIC(9,6),
     longitude           NUMERIC(9,6),
-    status_operacional  VARCHAR(20) NOT NULL DEFAULT 'OPERACIONAL',
-        -- valores esperados: OPERACIONAL, ALERTA, FALHA, MANUTENCAO
+    status_operacional  VARCHAR(20) NOT NULL DEFAULT 'OPERACIONAL'
+                        CHECK (status_operacional IN ('OPERACIONAL', 'ALERTA', 'FALHA', 'MANUTENCAO')),
     data_instalacao     DATE NOT NULL DEFAULT CURRENT_DATE,
     ativo               BOOLEAN NOT NULL DEFAULT TRUE
 );
@@ -59,19 +59,50 @@ CREATE TABLE telemetria (
 
 COMMENT ON TABLE telemetria IS 'Leituras brutas dos sensores (1 por minuto). Particionada por mês para otimizar consultas e o expurgo de dados antigos.';
 
--- Partições iniciais (uma por mês) — criar novas conforme o tempo avança
-CREATE TABLE telemetria_2026_09 PARTITION OF telemetria
-    FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-
-CREATE TABLE telemetria_2026_10 PARTITION OF telemetria
-    FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-
-CREATE TABLE telemetria_2026_11 PARTITION OF telemetria
-    FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-
--- Índice composto: consultas típicas filtram por sensor + período
-CREATE INDEX idx_telemetria_sensor_data
+-- Índice composto ÚNICO: consultas típicas filtram por sensor + período,
+-- e um sensor não pode ter duas leituras no mesmo minuto
+-- (evita duplicar dados se a transmissão for chamada duas vezes)
+CREATE UNIQUE INDEX idx_telemetria_sensor_data
     ON telemetria (id_sensor, data_hora);
+
+-- ---------------------------------------------------------------------
+-- 3a. CRIAÇÃO DAS PARTIÇÕES MENSAIS
+--     A telemetria só aceita leituras de meses que têm partição.
+--     sp_criar_particoes_periodo cria todos os meses entre duas datas
+--     (passado ou futuro). Partições novas herdam índices e triggers.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE sp_criar_particoes_periodo(
+    p_inicio TIMESTAMP,
+    p_fim    TIMESTAMP
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_mes   DATE := date_trunc('month', p_inicio)::DATE;
+    v_nome  TEXT;
+BEGIN
+    WHILE v_mes <= p_fim LOOP
+        v_nome := 'telemetria_' || to_char(v_mes, 'YYYY_MM');
+
+        IF to_regclass(v_nome) IS NULL THEN
+            EXECUTE format(
+                'CREATE TABLE %I PARTITION OF telemetria FOR VALUES FROM (%L) TO (%L)',
+                v_nome, v_mes, (v_mes + INTERVAL '1 month')::DATE);
+            RAISE NOTICE 'Partição criada: %', v_nome;
+        END IF;
+
+        v_mes := (v_mes + INTERVAL '1 month')::DATE;
+    END LOOP;
+END;
+$$;
+
+COMMENT ON PROCEDURE sp_criar_particoes_periodo(TIMESTAMP, TIMESTAMP) IS
+    'Cria as partições mensais da telemetria que faltam entre p_inicio e p_fim';
+
+-- Partições iniciais: 3 meses para trás (carga histórica) e 3 para frente
+CALL sp_criar_particoes_periodo(
+    (NOW() - INTERVAL '3 months')::TIMESTAMP,
+    (NOW() + INTERVAL '3 months')::TIMESTAMP);
 
 -- ---------------------------------------------------------------------
 -- 3b. TABELA HISTÓRICA (destino do arquivamento após 30 dias — Etapa 5)
@@ -96,10 +127,11 @@ CREATE TABLE logs_alertas (
     id_estacao          INTEGER NOT NULL REFERENCES estacoes(id_estacao),
     data_hora           TIMESTAMP NOT NULL DEFAULT NOW(),
     valor_registrado    NUMERIC(12,4) NOT NULL,
-    tipo_alerta         VARCHAR(30) NOT NULL,
-        -- ex: LIMITE_EXCEDIDO_MAX, LIMITE_EXCEDIDO_MIN, SENSOR_OFFLINE
+    tipo_alerta         VARCHAR(30) NOT NULL
+                        CHECK (tipo_alerta IN ('LIMITE_EXCEDIDO_MAX', 'LIMITE_EXCEDIDO_MIN',
+                                               'FALHA_SENSOR', 'SENSOR_OFFLINE')),
     status              VARCHAR(20) NOT NULL DEFAULT 'PENDENTE'
-        -- valores esperados: PENDENTE, RESOLVIDO
+                        CHECK (status IN ('PENDENTE', 'RESOLVIDO'))
 );
 
 COMMENT ON TABLE logs_alertas IS 'Ocorrências graves detectadas pela trigger de segurança sobre a tabela de telemetria';
