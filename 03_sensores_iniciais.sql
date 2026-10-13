@@ -27,17 +27,18 @@ WHERE NOT EXISTS (SELECT 1 FROM estacoes WHERE nome = 'Estação Meteorológica 
 INSERT INTO sensores (id_estacao, tipo_sensor, unidade_medida, limite_min, limite_max, numero_sensor_fisico)
 SELECT v.id_estacao, v.tipo_sensor, v.unidade_medida, v.limite_min, v.limite_max, v.numero_sensor_fisico
 FROM (VALUES
-    (1, 'TEMPERATURA_AR',       '°C',   -5::NUMERIC, 45::NUMERIC, '21084512'),
-    (1, 'UMIDADE_AR',           '%',     0,  100,  '21084512'),
-    (1, 'VELOCIDADE_VENTO',     'm/s',   0,   30,  '22103467'),
-    (1, 'DIRECAO_VENTO',        '°',  NULL, NULL,  '22103467'),
-    (1, 'RAJADA_VENTO',         'm/s',   0,   45,  '22103467'),
-    (1, 'PRESSAO_BAROMETRICA',  'hPa', 950, 1050,  '22051938'),
-    (1, 'RADIACAO_SOLAR',       'W/m²',  0, 1200,  '23027641'),
-    (1, 'PLUVIOMETRO',          'mm',    0,   50,  '21119305'),
-    (1, 'UMIDADE_SOLO',         '%',     0,  100,  '23046728')
-) AS v(id_estacao, tipo_sensor, unidade_medida, limite_min, limite_max, numero_sensor_fisico)
+    (1, 1, 'TEMPERATURA_AR',       '°C',   -5::NUMERIC, 45::NUMERIC, '21084512'),
+    (2, 1, 'UMIDADE_AR',           '%',     0,  100,  '21084512'),
+    (3, 1, 'VELOCIDADE_VENTO',     'm/s',   0,   30,  '22103467'),
+    (4, 1, 'DIRECAO_VENTO',        '°',  NULL, NULL,  '22103467'),
+    (5, 1, 'RAJADA_VENTO',         'm/s',   0,   45,  '22103467'),
+    (6, 1, 'PRESSAO_BAROMETRICA',  'hPa', 950, 1050,  '22051938'),
+    (7, 1, 'RADIACAO_SOLAR',       'W/m²',  0, 1200,  '23027641'),
+    (8, 1, 'PLUVIOMETRO',          'mm',    0,   50,  '21119305'),
+    (9, 1, 'UMIDADE_SOLO',         '%',     0,  100,  '23046728')
+) AS v(ordem, id_estacao, tipo_sensor, unidade_medida, limite_min, limite_max, numero_sensor_fisico)
 WHERE NOT EXISTS (
     SELECT 1 FROM sensores s
     WHERE s.id_estacao = v.id_estacao AND s.tipo_sensor = v.tipo_sensor
-);
+)
+ORDER BY v.ordem;   -- garante os ids na ordem da lista (temperatura = 1 ...)
