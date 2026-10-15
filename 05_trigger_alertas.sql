@@ -8,7 +8,10 @@
 -- Assim cada leitura histórica passa pela trigger, como passaria
 -- em produção, e o banco já nasce com um histórico de alertas real.
 --
--- O que a trigger faz a cada leitura inserida em telemetria:
+-- Cada linha da telemetria traz todos os sensores da estação naquele
+-- minuto (uma coluna por sensor). A trigger percorre os sensores
+-- ativos da estação, pega o valor da coluna de cada um
+-- (coluna = tipo_sensor em minúsculas) e, para cada sensor:
 --   1. FALHA DO SENSOR: valor fora da faixa física do aparelho
 --      (sensores.limite_min / limite_max) -> alerta FALHA_SENSOR
 --   2. EVENTO METEOROLÓGICO: valor viola alguma regra de
@@ -17,8 +20,10 @@
 --      não abre outro
 --   4. Volta ao normal: alertas pendentes que não valem mais
 --      viram RESOLVIDO
+-- No fim, uma vez por linha:
 --   5. Atualiza estacoes.status_operacional:
 --      FALHA > ALERTA > OPERACIONAL (MANUTENCAO nunca é sobrescrito)
+-- Coluna NULL (sensor não enviou leitura) é ignorada.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -50,45 +55,55 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    v_linha         JSONB := to_jsonb(NEW);   -- a linha inteira, para ler a coluna de cada sensor
     v_sensor        sensores%ROWTYPE;
+    v_valor         NUMERIC;
     v_limite        RECORD;
-    v_achou_limite  BOOLEAN := FALSE;
+    v_achou_limite  BOOLEAN;
     v_status_novo   VARCHAR(20);
 BEGIN
-    -- Dados do sensor que gerou a leitura
-    SELECT * INTO v_sensor
-    FROM sensores
-    WHERE id_sensor = NEW.id_sensor;
+    FOR v_sensor IN
+        SELECT * FROM sensores
+        WHERE id_estacao = NEW.id_estacao
+          AND ativo
+        ORDER BY id_sensor
+    LOOP
+        -- valor deste sensor = coluna com o nome do tipo_sensor
+        v_valor := (v_linha ->> lower(v_sensor.tipo_sensor))::NUMERIC;
 
-    -- =================================================================
-    -- PASSO 1: FALHA DO SENSOR (valor fisicamente impossível)
-    -- =================================================================
-    IF (v_sensor.limite_min IS NOT NULL AND NEW.valor < v_sensor.limite_min)
-    OR (v_sensor.limite_max IS NOT NULL AND NEW.valor > v_sensor.limite_max) THEN
+        -- sensor sem leitura neste minuto: nada a verificar
+        CONTINUE WHEN v_valor IS NULL;
 
-        -- Abre alerta só se não houver um FALHA_SENSOR pendente
-        IF NOT EXISTS (
-            SELECT 1 FROM logs_alertas
-            WHERE id_sensor   = NEW.id_sensor
-              AND tipo_alerta = 'FALHA_SENSOR'
-              AND status      = 'PENDENTE'
-        ) THEN
-            INSERT INTO logs_alertas
-                (id_sensor, id_estacao, data_hora, valor_registrado,
-                 tipo_alerta, status, id_limite, nivel)
-            VALUES
-                (NEW.id_sensor, v_sensor.id_estacao, NEW.data_hora, NEW.valor,
-                 'FALHA_SENSOR', 'PENDENTE', NULL, 'FALHA');
+        -- =============================================================
+        -- PASSO 1: FALHA DO SENSOR (valor fisicamente impossível)
+        -- =============================================================
+        IF (v_sensor.limite_min IS NOT NULL AND v_valor < v_sensor.limite_min)
+        OR (v_sensor.limite_max IS NOT NULL AND v_valor > v_sensor.limite_max) THEN
+
+            -- Abre alerta só se não houver um FALHA_SENSOR pendente
+            IF NOT EXISTS (
+                SELECT 1 FROM logs_alertas
+                WHERE id_sensor   = v_sensor.id_sensor
+                  AND tipo_alerta = 'FALHA_SENSOR'
+                  AND status      = 'PENDENTE'
+            ) THEN
+                INSERT INTO logs_alertas
+                    (id_sensor, id_estacao, data_hora, valor_registrado,
+                     tipo_alerta, status, id_limite, nivel)
+                VALUES
+                    (v_sensor.id_sensor, NEW.id_estacao, NEW.data_hora, v_valor,
+                     'FALHA_SENSOR', 'PENDENTE', NULL, 'FALHA');
+            END IF;
+
+            -- Valor inválido: não faz sentido avaliar as regras de clima.
+            -- Segue para o próximo sensor.
+            CONTINUE;
         END IF;
 
-        -- Valor inválido: não faz sentido avaliar as regras de clima.
-        -- Pula direto para a atualização do status.
-
-    ELSE
         -- Leitura fisicamente válida: se havia falha pendente, resolve
         UPDATE logs_alertas
            SET status = 'RESOLVIDO', data_resolucao = NEW.data_hora
-         WHERE id_sensor   = NEW.id_sensor
+         WHERE id_sensor   = v_sensor.id_sensor
            AND tipo_alerta = 'FALHA_SENSOR'
            AND status      = 'PENDENTE';
 
@@ -97,16 +112,16 @@ BEGIN
         -- =============================================================
         SELECT l.id_limite,
                l.nivel,
-               CASE WHEN l.limite_max IS NOT NULL AND NEW.valor > l.limite_max
+               CASE WHEN l.limite_max IS NOT NULL AND v_valor > l.limite_max
                     THEN 'LIMITE_EXCEDIDO_MAX'
                     ELSE 'LIMITE_EXCEDIDO_MIN'
                END AS tipo_alerta
           INTO v_limite
           FROM limites_alerta l
-         WHERE l.id_sensor = NEW.id_sensor
+         WHERE l.id_sensor = v_sensor.id_sensor
            AND l.ativo
-           AND (   (l.limite_max IS NOT NULL AND NEW.valor > l.limite_max)
-                OR (l.limite_min IS NOT NULL AND NEW.valor < l.limite_min))
+           AND (   (l.limite_max IS NOT NULL AND v_valor > l.limite_max)
+                OR (l.limite_min IS NOT NULL AND v_valor < l.limite_min))
          ORDER BY CASE l.nivel
                       WHEN 'CRITICO' THEN 3
                       WHEN 'ATENCAO' THEN 2
@@ -124,7 +139,7 @@ BEGIN
         -- =============================================================
         UPDATE logs_alertas
            SET status = 'RESOLVIDO', data_resolucao = NEW.data_hora
-         WHERE id_sensor = NEW.id_sensor
+         WHERE id_sensor = v_sensor.id_sensor
            AND status    = 'PENDENTE'
            AND id_limite IS NOT NULL
            AND (NOT v_achou_limite OR id_limite <> v_limite.id_limite);
@@ -134,7 +149,7 @@ BEGIN
         -- =============================================================
         IF v_achou_limite AND NOT EXISTS (
             SELECT 1 FROM logs_alertas
-            WHERE id_sensor = NEW.id_sensor
+            WHERE id_sensor = v_sensor.id_sensor
               AND id_limite = v_limite.id_limite
               AND status    = 'PENDENTE'
         ) THEN
@@ -142,10 +157,10 @@ BEGIN
                 (id_sensor, id_estacao, data_hora, valor_registrado,
                  tipo_alerta, status, id_limite, nivel)
             VALUES
-                (NEW.id_sensor, v_sensor.id_estacao, NEW.data_hora, NEW.valor,
+                (v_sensor.id_sensor, NEW.id_estacao, NEW.data_hora, v_valor,
                  v_limite.tipo_alerta, 'PENDENTE', v_limite.id_limite, v_limite.nivel);
         END IF;
-    END IF;
+    END LOOP;
 
     -- =================================================================
     -- PASSO 5: STATUS DA ESTAÇÃO (pelo alerta pendente mais grave)
@@ -160,13 +175,13 @@ BEGIN
            END
       INTO v_status_novo
       FROM logs_alertas
-     WHERE id_estacao = v_sensor.id_estacao
+     WHERE id_estacao = NEW.id_estacao
        AND status     = 'PENDENTE';
 
     -- Só grava se mudou, e nunca tira a estação de MANUTENCAO
     UPDATE estacoes
        SET status_operacional = v_status_novo
-     WHERE id_estacao = v_sensor.id_estacao
+     WHERE id_estacao = NEW.id_estacao
        AND status_operacional IS DISTINCT FROM v_status_novo
        AND status_operacional IS DISTINCT FROM 'MANUTENCAO';
 
@@ -175,12 +190,12 @@ END;
 $$;
 
 COMMENT ON FUNCTION fn_verificar_leitura() IS
-    'Verifica cada leitura nova: falha de sensor, regras de limites_alerta, abre/resolve alertas e atualiza o status da estação';
+    'Verifica cada linha nova da telemetria, sensor por sensor: falha de sensor, regras de limites_alerta, abre/resolve alertas e atualiza o status da estação';
 
 -- ---------------------------------------------------------------------
 -- 3. A TRIGGER
 --    AFTER INSERT: a leitura é sempre gravada; a trigger só reage.
---    FOR EACH ROW: cada leitura é verificada individualmente.
+--    FOR EACH ROW: cada minuto da estação é verificado individualmente.
 --    Criada na tabela particionada, vale para todas as partições.
 -- ---------------------------------------------------------------------
 DROP TRIGGER IF EXISTS trg_verificar_leitura ON telemetria;
@@ -193,39 +208,34 @@ EXECUTE FUNCTION fn_verificar_leitura();
 
 -- =====================================================================
 -- 4. TESTE (selecione e rode bloco por bloco)
---    Usa o sensor de temperatura. Horários no futuro próximo para
---    não misturar com a carga massiva.
+--    Usa só a coluna de temperatura (as outras ficam NULL e são
+--    ignoradas). Horários no futuro próximo para não misturar com a
+--    carga massiva.
 -- =====================================================================
 /*
 -- 4.1 Leitura normal (25 °C) -> nenhum alerta
-INSERT INTO telemetria (id_sensor, data_hora, valor)
-SELECT id_sensor, NOW() + INTERVAL '1 min', 25
-FROM sensores WHERE tipo_sensor = 'TEMPERATURA_AR' AND id_estacao = 1;
+INSERT INTO telemetria (id_estacao, data_hora, temperatura_ar)
+VALUES (1, date_trunc('minute', NOW()) + INTERVAL '1 min', 25);
 
 -- 4.2 Calor (33 °C) -> abre "Calor" (ATENCAO), estação vira ALERTA
-INSERT INTO telemetria (id_sensor, data_hora, valor)
-SELECT id_sensor, NOW() + INTERVAL '2 min', 33
-FROM sensores WHERE tipo_sensor = 'TEMPERATURA_AR' AND id_estacao = 1;
+INSERT INTO telemetria (id_estacao, data_hora, temperatura_ar)
+VALUES (1, date_trunc('minute', NOW()) + INTERVAL '2 min', 33);
 
 -- 4.3 Continua em 33 °C -> NÃO abre outro (já existe pendente)
-INSERT INTO telemetria (id_sensor, data_hora, valor)
-SELECT id_sensor, NOW() + INTERVAL '3 min', 33.5
-FROM sensores WHERE tipo_sensor = 'TEMPERATURA_AR' AND id_estacao = 1;
+INSERT INTO telemetria (id_estacao, data_hora, temperatura_ar)
+VALUES (1, date_trunc('minute', NOW()) + INTERVAL '3 min', 33.5);
 
 -- 4.4 Sobe para 39 °C -> resolve "Calor", abre só "Calor extremo" (CRITICO)
-INSERT INTO telemetria (id_sensor, data_hora, valor)
-SELECT id_sensor, NOW() + INTERVAL '4 min', 39
-FROM sensores WHERE tipo_sensor = 'TEMPERATURA_AR' AND id_estacao = 1;
+INSERT INTO telemetria (id_estacao, data_hora, temperatura_ar)
+VALUES (1, date_trunc('minute', NOW()) + INTERVAL '4 min', 39);
 
 -- 4.5 Sensor com defeito (120 °C, fora da faixa física) -> FALHA_SENSOR, estação FALHA
-INSERT INTO telemetria (id_sensor, data_hora, valor)
-SELECT id_sensor, NOW() + INTERVAL '5 min', 120
-FROM sensores WHERE tipo_sensor = 'TEMPERATURA_AR' AND id_estacao = 1;
+INSERT INTO telemetria (id_estacao, data_hora, temperatura_ar)
+VALUES (1, date_trunc('minute', NOW()) + INTERVAL '5 min', 120);
 
 -- 4.6 Volta ao normal (24 °C) -> resolve tudo, estação OPERACIONAL
-INSERT INTO telemetria (id_sensor, data_hora, valor)
-SELECT id_sensor, NOW() + INTERVAL '6 min', 24
-FROM sensores WHERE tipo_sensor = 'TEMPERATURA_AR' AND id_estacao = 1;
+INSERT INTO telemetria (id_estacao, data_hora, temperatura_ar)
+VALUES (1, date_trunc('minute', NOW()) + INTERVAL '6 min', 24);
 
 -- Conferir os alertas
 SELECT a.id_alerta, s.tipo_sensor, l.nome AS regra, a.nivel, a.tipo_alerta,

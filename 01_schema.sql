@@ -48,22 +48,46 @@ COMMENT ON COLUMN sensores.numero_sensor_fisico IS 'Número de série do disposi
 
 -- ---------------------------------------------------------------------
 -- 3. HISTÓRICO DE TELEMETRIA — PARTICIONADA POR DATA (mês)
+--    Uma linha por estação por minuto, com uma coluna por sensor.
+--    O nome de cada coluna é o tipo_sensor da tabela sensores em
+--    minúsculas (TEMPERATURA_AR -> temperatura_ar). A trigger de alertas
+--    usa essa regra para saber qual coluna é de qual sensor.
+--    Sensor novo na estação = ALTER TABLE telemetria ADD COLUMN <tipo>
+--    + cadastrar o sensor com o mesmo tipo_sensor.
+--    NULL = o sensor não enviou leitura naquele minuto.
 -- ---------------------------------------------------------------------
 CREATE TABLE telemetria (
     id_leitura          BIGSERIAL,
-    id_sensor           INTEGER NOT NULL REFERENCES sensores(id_sensor),
+    id_estacao          INTEGER NOT NULL REFERENCES estacoes(id_estacao),
     data_hora           TIMESTAMP NOT NULL,
-    valor               NUMERIC(12,4) NOT NULL,
+    temperatura_ar      NUMERIC(10,2),
+    umidade_ar          NUMERIC(10,2),
+    velocidade_vento    NUMERIC(10,2),
+    direcao_vento       NUMERIC(10,2),
+    rajada_vento        NUMERIC(10,2),
+    pressao_barometrica NUMERIC(10,2),
+    radiacao_solar      NUMERIC(10,2),
+    pluviometro         NUMERIC(10,2),
+    umidade_solo        NUMERIC(10,2),
     PRIMARY KEY (id_leitura, data_hora)
 ) PARTITION BY RANGE (data_hora);
 
-COMMENT ON TABLE telemetria IS 'Leituras brutas dos sensores (1 por minuto). Particionada por mês para otimizar consultas e o expurgo de dados antigos.';
+COMMENT ON TABLE telemetria IS 'Leituras da estação (1 linha por minuto, 1 coluna por sensor). Particionada por mês para otimizar consultas e o expurgo de dados antigos.';
+COMMENT ON COLUMN telemetria.temperatura_ar      IS 'Temperatura do ar (°C)';
+COMMENT ON COLUMN telemetria.umidade_ar          IS 'Umidade relativa do ar (%)';
+COMMENT ON COLUMN telemetria.velocidade_vento    IS 'Velocidade média do vento (m/s)';
+COMMENT ON COLUMN telemetria.direcao_vento       IS 'Direção do vento (graus, 0 = norte)';
+COMMENT ON COLUMN telemetria.rajada_vento        IS 'Rajada de vento (m/s)';
+COMMENT ON COLUMN telemetria.pressao_barometrica IS 'Pressão barométrica ao nível do mar (hPa)';
+COMMENT ON COLUMN telemetria.radiacao_solar      IS 'Radiação solar global (W/m²)';
+COMMENT ON COLUMN telemetria.pluviometro         IS 'Chuva acumulada no minuto (mm)';
+COMMENT ON COLUMN telemetria.umidade_solo        IS 'Umidade do solo (%)';
 
--- Índice composto ÚNICO: consultas típicas filtram por sensor + período,
--- e um sensor não pode ter duas leituras no mesmo minuto
+-- Índice composto ÚNICO: consultas típicas filtram por estação + período,
+-- e uma estação não pode ter duas linhas no mesmo minuto
 -- (evita duplicar dados se a transmissão for chamada duas vezes)
-CREATE UNIQUE INDEX idx_telemetria_sensor_data
-    ON telemetria (id_sensor, data_hora);
+CREATE UNIQUE INDEX idx_telemetria_estacao_data
+    ON telemetria (id_estacao, data_hora);
 
 -- ---------------------------------------------------------------------
 -- 3a. CRIAÇÃO DAS PARTIÇÕES MENSAIS
@@ -107,11 +131,20 @@ CALL sp_criar_particoes_periodo(
 -- ---------------------------------------------------------------------
 -- 3b. TABELA HISTÓRICA (destino do arquivamento após 30 dias — Etapa 5)
 -- ---------------------------------------------------------------------
+-- Mesmas colunas da telemetria + data_arquivamento
 CREATE TABLE telemetria_historico (
     id_leitura          BIGINT NOT NULL,
-    id_sensor           INTEGER NOT NULL REFERENCES sensores(id_sensor),
+    id_estacao          INTEGER NOT NULL REFERENCES estacoes(id_estacao),
     data_hora           TIMESTAMP NOT NULL,
-    valor               NUMERIC(12,4) NOT NULL,
+    temperatura_ar      NUMERIC(10,2),
+    umidade_ar          NUMERIC(10,2),
+    velocidade_vento    NUMERIC(10,2),
+    direcao_vento       NUMERIC(10,2),
+    rajada_vento        NUMERIC(10,2),
+    pressao_barometrica NUMERIC(10,2),
+    radiacao_solar      NUMERIC(10,2),
+    pluviometro         NUMERIC(10,2),
+    umidade_solo        NUMERIC(10,2),
     data_arquivamento   TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (id_leitura, data_hora)
 );

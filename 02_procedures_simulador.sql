@@ -159,8 +159,11 @@ COMMENT ON FUNCTION fn_gerar_valor_sensor(VARCHAR, NUMERIC, NUMERIC, TIMESTAMP, 
     'Valor simulado e realista de um sensor num instante (ciclo do dia + clima do dia + falhas raras)';
 
 -- ---------------------------------------------------------------------
--- PROCEDURE 1: CARGA DE UM PERÍODO (1 leitura por minuto)
+-- PROCEDURE 1: CARGA DE UM PERÍODO (1 linha por minuto)
 -- Insere tudo de uma vez (set-based, com generate_series).
+-- Para cada minuto, gera o valor de cada sensor ativo da estação e
+-- coloca cada um na sua coluna (temperatura_ar, umidade_ar, ...).
+-- Sensor inativo fica NULL.
 -- Para períodos longos use sp_gerar_historico, que chama esta
 -- procedure mês a mês.
 -- ---------------------------------------------------------------------
@@ -175,22 +178,38 @@ AS $$
 DECLARE
     v_qtd_inserida BIGINT;
 BEGIN
-    INSERT INTO telemetria (id_sensor, data_hora, valor)
+    INSERT INTO telemetria (id_estacao, data_hora,
+        temperatura_ar, umidade_ar, velocidade_vento, direcao_vento, rajada_vento,
+        pressao_barometrica, radiacao_solar, pluviometro, umidade_solo)
     SELECT
-        s.id_sensor,
+        p_id_estacao,
         gs AS data_hora,
-        fn_gerar_valor_sensor(s.tipo_sensor, s.limite_min, s.limite_max, gs, p_prob_anomalia)
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'TEMPERATURA_AR'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'UMIDADE_AR'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'VELOCIDADE_VENTO'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'DIRECAO_VENTO'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'RAJADA_VENTO'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'PRESSAO_BAROMETRICA'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'RADIACAO_SOLAR'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'PLUVIOMETRO'),
+        max(v.valor) FILTER (WHERE v.tipo_sensor = 'UMIDADE_SOLO')
     FROM generate_series(date_trunc('minute', p_data_inicio),
                          date_trunc('minute', p_data_fim),
                          INTERVAL '1 minute') AS gs
-    CROSS JOIN sensores s
-    WHERE s.id_estacao = p_id_estacao
-      AND s.ativo = TRUE
-    ORDER BY gs, s.id_sensor          -- em ordem de tempo, como chegaria da estação
+    CROSS JOIN LATERAL (
+        SELECT s.tipo_sensor,
+               fn_gerar_valor_sensor(s.tipo_sensor, s.limite_min, s.limite_max,
+                                     gs, p_prob_anomalia) AS valor
+        FROM sensores s
+        WHERE s.id_estacao = p_id_estacao
+          AND s.ativo = TRUE
+    ) AS v
+    GROUP BY gs
+    ORDER BY gs                       -- em ordem de tempo, como chegaria da estação
     ON CONFLICT DO NOTHING;           -- minutos que já existem são ignorados
 
     GET DIAGNOSTICS v_qtd_inserida = ROW_COUNT;
-    RAISE NOTICE 'Carga concluída: % leituras inseridas (estação %, % a %)',
+    RAISE NOTICE 'Carga concluída: % minutos inseridos (estação %, % a %)',
         v_qtd_inserida, p_id_estacao, p_data_inicio, p_data_fim;
 END;
 $$;

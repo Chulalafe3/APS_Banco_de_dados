@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS log_arquivamento (
 COMMENT ON TABLE log_arquivamento IS
     'Histórico de execuções da procedure de arquivamento (Data Lifecycle)';
 
--- Índice no histórico: consultas antigas também filtram por sensor + período
-CREATE INDEX IF NOT EXISTS idx_historico_sensor_data
-    ON telemetria_historico (id_sensor, data_hora);
+-- Índice no histórico: consultas antigas também filtram por estação + período
+CREATE INDEX IF NOT EXISTS idx_historico_estacao_data
+    ON telemetria_historico (id_estacao, data_hora);
 
 -- ---------------------------------------------------------------------
 -- 2. PROCEDURE DE ARQUIVAMENTO
@@ -49,10 +49,16 @@ BEGIN
     WITH movidas AS (
         DELETE FROM telemetria
         WHERE data_hora < v_corte
-        RETURNING id_leitura, id_sensor, data_hora, valor
+        RETURNING id_leitura, id_estacao, data_hora,
+                  temperatura_ar, umidade_ar, velocidade_vento, direcao_vento, rajada_vento,
+                  pressao_barometrica, radiacao_solar, pluviometro, umidade_solo
     )
-    INSERT INTO telemetria_historico (id_leitura, id_sensor, data_hora, valor)
-    SELECT id_leitura, id_sensor, data_hora, valor
+    INSERT INTO telemetria_historico (id_leitura, id_estacao, data_hora,
+        temperatura_ar, umidade_ar, velocidade_vento, direcao_vento, rajada_vento,
+        pressao_barometrica, radiacao_solar, pluviometro, umidade_solo)
+    SELECT id_leitura, id_estacao, data_hora,
+        temperatura_ar, umidade_ar, velocidade_vento, direcao_vento, rajada_vento,
+        pressao_barometrica, radiacao_solar, pluviometro, umidade_solo
     FROM movidas
     ON CONFLICT (id_leitura, data_hora) DO NOTHING;
 
@@ -63,7 +69,7 @@ BEGIN
     INSERT INTO log_arquivamento (data_corte, linhas_movidas, duracao_ms)
     VALUES (v_corte, v_linhas, v_ms);
 
-    RAISE NOTICE 'Arquivamento concluído: % leituras anteriores a % movidas em % ms',
+    RAISE NOTICE 'Arquivamento concluído: % minutos anteriores a % movidos em % ms',
                  v_linhas, v_corte, v_ms;
 END;
 $$;
@@ -98,10 +104,16 @@ CALL sp_criar_particoes(3);
 --    tabela cada leitura está.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE VIEW vw_telemetria_completa AS
-    SELECT id_leitura, id_sensor, data_hora, valor, 'ATUAL'     AS origem
+    SELECT id_leitura, id_estacao, data_hora,
+        temperatura_ar, umidade_ar, velocidade_vento, direcao_vento, rajada_vento,
+        pressao_barometrica, radiacao_solar, pluviometro, umidade_solo,
+           'ATUAL'     AS origem
     FROM telemetria
     UNION ALL
-    SELECT id_leitura, id_sensor, data_hora, valor, 'ARQUIVADO' AS origem
+    SELECT id_leitura, id_estacao, data_hora,
+        temperatura_ar, umidade_ar, velocidade_vento, direcao_vento, rajada_vento,
+        pressao_barometrica, radiacao_solar, pluviometro, umidade_solo,
+           'ARQUIVADO' AS origem
     FROM telemetria_historico;
 
 COMMENT ON VIEW vw_telemetria_completa IS
