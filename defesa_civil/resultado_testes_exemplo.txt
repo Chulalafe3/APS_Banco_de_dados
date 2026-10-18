@@ -1,0 +1,245 @@
+SET
+psql:06_testes_desempenho.sql:25: NOTICE:  table "bench_resultado" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+CREATE PROCEDURE
+CREATE PROCEDURE
+CALL
+INSERT 0 1
+INSERT 0 6
+INSERT 0 4
+CALL
+CALL
+DELETE 4
+DELETE 6
+DELETE 1
+psql:06_testes_desempenho.sql:137: NOTICE:  table "bench_a_sem_indice" does not exist, skipping
+psql:06_testes_desempenho.sql:137: NOTICE:  table "bench_b_indice" does not exist, skipping
+psql:06_testes_desempenho.sql:137: NOTICE:  table "bench_c_particionada" does not exist, skipping
+DROP TABLE
+psql:06_testes_desempenho.sql:138: NOTICE:  materialized view "bench_d_mv_horaria" does not exist, skipping
+DROP MATERIALIZED VIEW
+SELECT 529039
+SELECT 529039
+CREATE INDEX
+CREATE TABLE
+DO
+INSERT 0 529039
+CREATE INDEX
+SELECT 8818
+CREATE INDEX
+VACUUM
+VACUUM
+VACUUM
+VACUUM
+       cenario        | tamanho 
+----------------------+---------
+ A sem índice         | 49 MB
+ B índice             | 65 MB
+ D view materializada | 936 kB
+(3 rows)
+
+Massa de teste: 529039 linhas | período 7 dias: 2026-10-11 00:00:00-03 a 2026-10-18 00:00:00-03
+===== Q1 - Estação Centro, 1 dia, vento máximo =====
+--- A) sem índice
+                                                                                          QUERY PLAN                                                                                           
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate (actual time=22.448..24.982 rows=1 loops=1)
+   Buffers: shared hit=161 read=6111
+   ->  Gather (actual time=21.442..24.977 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=161 read=6111
+         ->  Partial Aggregate (actual time=17.347..17.348 rows=1 loops=3)
+               Buffers: shared hit=161 read=6111
+               ->  Parallel Seq Scan on bench_a_sem_indice (actual time=17.150..17.284 rows=480 loops=3)
+                     Filter: ((data_hora >= '2026-10-17 00:00:00-03'::timestamp with time zone) AND (data_hora < '2026-10-18 00:00:00-03'::timestamp with time zone) AND (id_dispositivo = 1))
+                     Rows Removed by Filter: 175866
+                     Buffers: shared hit=161 read=6111
+ Planning:
+   Buffers: shared hit=16
+ Planning Time: 0.134 ms
+ Execution Time: 24.999 ms
+(16 rows)
+
+--- B) índice composto
+                                                                                         QUERY PLAN                                                                                          
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate (actual time=0.447..0.448 rows=1 loops=1)
+   Buffers: shared read=43
+   ->  Bitmap Heap Scan on bench_b_indice (actual time=0.089..0.292 rows=1440 loops=1)
+         Recheck Cond: ((id_dispositivo = 1) AND (data_hora >= '2026-10-17 00:00:00-03'::timestamp with time zone) AND (data_hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+         Heap Blocks: exact=35
+         Buffers: shared read=43
+         ->  Bitmap Index Scan on bench_b_indice_id_dispositivo_data_hora_idx (actual time=0.078..0.079 rows=1440 loops=1)
+               Index Cond: ((id_dispositivo = 1) AND (data_hora >= '2026-10-17 00:00:00-03'::timestamp with time zone) AND (data_hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+               Buffers: shared read=8
+ Planning:
+   Buffers: shared hit=12
+ Planning Time: 0.134 ms
+ Execution Time: 0.461 ms
+(13 rows)
+
+===== Q2 - Temperatura média de 7 dias por estação =====
+--- A) sem índice
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate (actual time=23.149..25.038 rows=2 loops=1)
+   Group Key: id_dispositivo
+   Buffers: shared hit=271 read=6015
+   ->  Gather Merge (actual time=23.127..25.012 rows=6 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=271 read=6015
+         ->  Sort (actual time=18.833..18.834 rows=2 loops=3)
+               Sort Key: id_dispositivo
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=271 read=6015
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate (actual time=18.810..18.811 rows=2 loops=3)
+                     Group Key: id_dispositivo
+                     Batches: 1  Memory Usage: 24kB
+                     Buffers: shared hit=257 read=6015
+                     Worker 0:  Batches: 1  Memory Usage: 24kB
+                     Worker 1:  Batches: 1  Memory Usage: 24kB
+                     ->  Parallel Seq Scan on bench_a_sem_indice (actual time=16.170..17.863 rows=6720 loops=3)
+                           Filter: ((data_hora >= '2026-10-11 00:00:00-03'::timestamp with time zone) AND (data_hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+                           Rows Removed by Filter: 169626
+                           Buffers: shared hit=257 read=6015
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.057 ms
+ Execution Time: 25.061 ms
+(27 rows)
+
+--- B) índice composto (não ajuda: a consulta não filtra a estação)
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate (actual time=22.610..23.792 rows=2 loops=1)
+   Group Key: id_dispositivo
+   Buffers: shared hit=81 read=6205
+   ->  Gather Merge (actual time=22.584..23.766 rows=4 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=81 read=6205
+         ->  Sort (actual time=17.716..17.717 rows=1 loops=3)
+               Sort Key: id_dispositivo
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=81 read=6205
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate (actual time=17.701..17.702 rows=1 loops=3)
+                     Group Key: id_dispositivo
+                     Batches: 1  Memory Usage: 24kB
+                     Buffers: shared hit=67 read=6205
+                     Worker 0:  Batches: 1  Memory Usage: 24kB
+                     Worker 1:  Batches: 1  Memory Usage: 24kB
+                     ->  Parallel Seq Scan on bench_b_indice (actual time=16.027..16.755 rows=6720 loops=3)
+                           Filter: ((data_hora >= '2026-10-11 00:00:00-03'::timestamp with time zone) AND (data_hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+                           Rows Removed by Filter: 169626
+                           Buffers: shared hit=67 read=6205
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.091 ms
+ Execution Time: 23.815 ms
+(27 rows)
+
+--- C) particionada (lê só as partições do período)
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate (actual time=5.624..5.625 rows=2 loops=1)
+   Group Key: bench_c_particionada.id_dispositivo
+   Batches: 1  Memory Usage: 24kB
+   Buffers: shared hit=604
+   ->  Seq Scan on bench_c_202610 bench_c_particionada (actual time=1.279..3.265 rows=20160 loops=1)
+         Filter: ((data_hora >= '2026-10-11 00:00:00-03'::timestamp with time zone) AND (data_hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+         Rows Removed by Filter: 30799
+         Buffers: shared hit=604
+ Planning:
+   Buffers: shared hit=20
+ Planning Time: 0.144 ms
+ Execution Time: 5.639 ms
+(12 rows)
+
+--- D) view materializada
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate (actual time=0.149..0.150 rows=2 loops=1)
+   Group Key: id_dispositivo
+   Batches: 1  Memory Usage: 24kB
+   Buffers: shared hit=8 read=1
+   ->  Bitmap Heap Scan on bench_d_mv_horaria (actual time=0.017..0.089 rows=336 loops=1)
+         Recheck Cond: ((hora >= '2026-10-11 00:00:00-03'::timestamp with time zone) AND (hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+         Heap Blocks: exact=6
+         Buffers: shared hit=8 read=1
+         ->  Bitmap Index Scan on bench_d_mv_horaria_hora_idx (actual time=0.013..0.013 rows=336 loops=1)
+               Index Cond: ((hora >= '2026-10-11 00:00:00-03'::timestamp with time zone) AND (hora < '2026-10-18 00:00:00-03'::timestamp with time zone))
+               Buffers: shared hit=2 read=1
+ Planning:
+   Buffers: shared hit=13 read=2
+ Planning Time: 0.093 ms
+ Execution Time: 0.166 ms
+(15 rows)
+
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CALL
+CREATE VIEW
+         experimento          |       cenario        | execucoes | media_ms | desvio_ms | min_ms  | max_ms  | p95_ms  | registros_por_s 
+------------------------------+----------------------+-----------+----------+-----------+---------+---------+---------+-----------------
+ ESCRITA_LOTE                 | leitura (real)       |        20 |  148.017 |    11.474 | 126.723 | 172.750 | 169.745 |            6794
+ ESCRITA_UNITARIO             | leitura (real)       |        20 |  631.527 |    55.150 | 526.806 | 725.809 | 722.395 |            1595
+ Q1_ESTACAO_1DIA_VENTO_MAX    | A sem índice         |       500 |   25.257 |     4.084 |  19.097 |  45.467 |  33.091 |                
+ Q1_ESTACAO_1DIA_VENTO_MAX    | B índice             |       500 |    0.284 |     0.041 |   0.236 |   0.489 |   0.373 |                
+ Q1_ESTACAO_1DIA_VENTO_MAX    | C particionada       |       500 |    0.323 |     0.049 |   0.268 |   0.555 |   0.425 |                
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | A sem índice         |       500 |   26.205 |     4.765 |  20.674 |  47.359 |  37.081 |                
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | B índice             |       500 |   28.203 |     6.412 |  20.532 |  50.537 |  43.907 |                
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | C particionada       |       500 |    4.867 |     1.293 |   3.953 |  20.188 |   7.690 |                
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | D view materializada |       500 |    0.143 |     0.055 |   0.092 |   0.533 |   0.234 |                
+ Q3_MIN_MAX_7D_POR_ESTACAO    | A sem índice         |       500 |   28.998 |     5.430 |  23.337 |  48.718 |  42.274 |                
+ Q3_MIN_MAX_7D_POR_ESTACAO    | B índice             |       500 |   29.515 |     6.073 |  22.594 |  53.804 |  43.007 |                
+ Q3_MIN_MAX_7D_POR_ESTACAO    | C particionada       |       500 |    6.011 |     1.303 |   5.088 |  11.244 |   9.872 |                
+ Q3_MIN_MAX_7D_POR_ESTACAO    | D view materializada |       500 |    0.146 |     0.054 |   0.109 |   0.653 |   0.219 |                
+ Q4_VENTO_ACIMA_5_POR_DIA_30D | A sem índice         |       500 |   57.131 |    10.441 |  47.128 | 100.995 |  81.725 |                
+ Q4_VENTO_ACIMA_5_POR_DIA_30D | B índice             |       500 |    9.141 |     1.984 |   7.060 |  14.678 |  13.955 |                
+ Q4_VENTO_ACIMA_5_POR_DIA_30D | C particionada       |       500 |   10.898 |     2.646 |   7.831 |  16.490 |  15.465 |                
+ Q5_CHUVA_DO_DIA              | coluna acumulada     |       500 |    0.048 |     0.016 |   0.041 |   0.281 |   0.070 |                
+ Q5_CHUVA_DO_DIA              | somando minutos      |       500 |    0.322 |     0.095 |   0.218 |   0.759 |   0.481 |                
+(18 rows)
+
+         experimento          |       cenario        | media_ms | vezes_mais_rapido 
+------------------------------+----------------------+----------+-------------------
+ Q1_ESTACAO_1DIA_VENTO_MAX    | A sem índice         |   25.257 |               1.0
+ Q1_ESTACAO_1DIA_VENTO_MAX    | B índice             |    0.284 |              88.9
+ Q1_ESTACAO_1DIA_VENTO_MAX    | C particionada       |    0.323 |              78.2
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | A sem índice         |   26.205 |               1.0
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | B índice             |   28.203 |               0.9
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | C particionada       |    4.867 |               5.4
+ Q2_TEMP_MEDIA_7D_POR_ESTACAO | D view materializada |    0.143 |             183.3
+ Q3_MIN_MAX_7D_POR_ESTACAO    | A sem índice         |   28.998 |               1.0
+ Q3_MIN_MAX_7D_POR_ESTACAO    | B índice             |   29.515 |               1.0
+ Q3_MIN_MAX_7D_POR_ESTACAO    | C particionada       |    6.011 |               4.8
+ Q3_MIN_MAX_7D_POR_ESTACAO    | D view materializada |    0.146 |             198.6
+ Q4_VENTO_ACIMA_5_POR_DIA_30D | A sem índice         |   57.131 |               1.0
+ Q4_VENTO_ACIMA_5_POR_DIA_30D | B índice             |    9.141 |               6.2
+ Q4_VENTO_ACIMA_5_POR_DIA_30D | C particionada       |   10.898 |               5.2
+(14 rows)
+
+
+real	2m13.711s
+user	0m0.031s
+sys	0m0.014s

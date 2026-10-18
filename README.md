@@ -1,5 +1,10 @@
 # APS — Banco de Dados de Telemetria IoT (Estação Meteorológica)
 
+> **Versão atual: pasta [`defesa_civil/`](defesa_civil/)** — monitoramento para a Defesa Civil de São José dos Campos
+> (2 estações, eventos de transmissão/falha/alarme, partições com arquivamento mensal e testes de desempenho).
+> Instruções no [`defesa_civil/LEIAME.md`](defesa_civil/LEIAME.md).
+> Os scripts na raiz abaixo são a versão anterior (1 estação, 9 sensores), mantidos como histórico.
+
 APS Independente — LPBD (UNIP). PostgreSQL + PL/pgSQL.
 
 ## Ordem de execução (banco novo)
