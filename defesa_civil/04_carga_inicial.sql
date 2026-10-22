@@ -5,6 +5,10 @@
 --
 -- Tempo esperado: alguns minutos (são ~527 mil leituras passando
 -- pelas triggers, uma a uma, como num sistema real).
+--
+-- ATENÇÃO: rode pelo PSQL Tool (ou pelo rodar_tudo.sql), NÃO pela Query
+-- Tool. O simulador faz COMMIT a cada lote, e a Query Tool envia o arquivo
+-- inteiro como uma transação só -> "invalid transaction termination".
 -- =====================================================================
 SET TIME ZONE 'America/Sao_Paulo';
 
@@ -17,10 +21,16 @@ VALUES ('Defesa Civil de São José dos Campos', 'São José dos Campos', 'SP');
 -- ---------------------------------------------------------------------
 -- 2. Dispositivos (estações)
 -- ---------------------------------------------------------------------
+-- id_cliente buscado pelo nome (não fixo em 1): se uma execução anterior
+-- falhou, a sequência já avançou e o cliente pode ter recebido outro id
 INSERT INTO dispositivo (id_cliente, nome, intervalo_leitura_min, intervalo_transmissao_min,
                          latitude, longitude)
-VALUES (1, 'Estação Centro',     1, 10, -23.179400, -45.886900),
-       (1, 'Estação Zona Norte', 1, 10, -23.151000, -45.892000);
+SELECT c.id_cliente, v.nome, 1, 10, v.lat, v.lon
+  FROM cliente c
+ CROSS JOIN (VALUES ('Estação Centro',     -23.179400, -45.886900),
+                    ('Estação Zona Norte', -23.151000, -45.892000)) AS v(nome, lat, lon)
+ WHERE c.nome = 'Defesa Civil de São José dos Campos'
+ ORDER BY v.nome;
 
 -- ---------------------------------------------------------------------
 -- 3. Sensores com a faixa física válida (limites de segurança)
@@ -60,18 +70,26 @@ CALL sp_criar_particoes((CURRENT_DATE - INTERVAL '6 months')::DATE, 9);
 -- ---------------------------------------------------------------------
 -- 6. Simulação: 6 meses até agora, com um dia de temporal há 5 dias
 -- ---------------------------------------------------------------------
-CALL sp_simular_dispositivo(
-    p_id_dispositivo     => 1,
-    p_inicio             => date_trunc('day', now() - INTERVAL '6 months'),
-    p_fim                => date_trunc('minute', now()),
-    p_dia_temporal       => CURRENT_DATE - 5);
+-- (bloco DO para buscar os ids pelo nome: CALL não aceita subconsulta
+--  nos argumentos; o COMMIT do simulador funciona dentro do DO)
+DO $$
+DECLARE
+    v_centro INTEGER := (SELECT id_dispositivo FROM dispositivo WHERE nome = 'Estação Centro');
+    v_norte  INTEGER := (SELECT id_dispositivo FROM dispositivo WHERE nome = 'Estação Zona Norte');
+BEGIN
+    CALL sp_simular_dispositivo(
+        p_id_dispositivo     => v_centro,
+        p_inicio             => date_trunc('day', now() - INTERVAL '6 months'),
+        p_fim                => date_trunc('minute', now()),
+        p_dia_temporal       => CURRENT_DATE - 5);
 
-CALL sp_simular_dispositivo(
-    p_id_dispositivo     => 2,
-    p_inicio             => date_trunc('day', now() - INTERVAL '6 months'),
-    p_fim                => date_trunc('minute', now()),
-    p_dia_temporal       => CURRENT_DATE - 5,
-    p_ajuste_temperatura => -0.8);       -- Zona Norte um pouco mais fresca
+    CALL sp_simular_dispositivo(
+        p_id_dispositivo     => v_norte,
+        p_inicio             => date_trunc('day', now() - INTERVAL '6 months'),
+        p_fim                => date_trunc('minute', now()),
+        p_dia_temporal       => CURRENT_DATE - 5,
+        p_ajuste_temperatura => -0.8);       -- Zona Norte um pouco mais fresca
+END $$;
 
 ANALYZE;
 CALL sp_atualizar_resumo_horario();

@@ -18,7 +18,19 @@ Criar um banco novo (ex.: `aps_defesa_civil`) e rodar, nesta ordem:
 | 5 | `05_consultas.sql` | Views para visualização e consultas de exemplo | segundos |
 | 6 | `06_testes_desempenho.sql` | Testes de escrita e consulta | ~2–3 min |
 
-> O `06` usa variáveis do `psql`. No pgAdmin, rode pelo **PSQL Tool** (botão direito no banco → PSQL Tool → `\i caminho/06_testes_desempenho.sql`), não pela Query Tool.
+> O `04` e o `06` precisam do **PSQL Tool** (botão direito no banco → PSQL Tool → `\i 'caminho/arquivo.sql'`), não da Query Tool:
+> o simulador faz `COMMIT` a cada lote, e a Query Tool envia o arquivo inteiro como uma única transação
+> (erro *invalid transaction termination*). O `06` também usa variáveis do `psql`.
+
+### Jeito mais fácil: um comando só
+
+No PSQL Tool do banco `aps_defesa_civil` (use barras normais no caminho):
+
+```
+\i 'C:/caminho/APS_Banco_de_dados/defesa_civil/rodar_tudo.sql'
+```
+
+Ele **apaga e recria** o schema `public` e roda do `01` ao `05` (~2 min).
 
 ---
 
