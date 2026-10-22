@@ -3,6 +3,8 @@
 > **Versão atual: pasta [`defesa_civil/`](defesa_civil/)** — monitoramento para a Defesa Civil de São José dos Campos
 > (2 estações, eventos de transmissão/falha/alarme, partições com arquivamento mensal e testes de desempenho).
 > Instruções no [`defesa_civil/LEIAME.md`](defesa_civil/LEIAME.md).
+> Inclui segurança de dados críticos (usuários, RLS, auditoria encadeada por hash), backup/contingência
+> e um painel web em HTML/CSS/JS puro com servidor Node.js (`defesa_civil/web`).
 > Os scripts na raiz abaixo são a versão anterior (1 estação, 9 sensores), mantidos como histórico.
 
 APS Independente — LPBD (UNIP). PostgreSQL + PL/pgSQL.

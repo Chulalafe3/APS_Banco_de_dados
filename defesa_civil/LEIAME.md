@@ -1,36 +1,55 @@
-# APS – Banco de Dados de Telemetria IoT
+# APS – Banco de Dados de Telemetria IoT (dados críticos)
 ## Monitoramento meteorológico para a Defesa Civil de São José dos Campos
 
-Banco de dados PostgreSQL (PL/pgSQL) para receber, validar, armazenar e consultar dados de estações meteorológicas, com detecção de falhas e alarmes em tempo real.
+Banco de dados PostgreSQL (PL/pgSQL) para receber, validar, armazenar e consultar dados de estações meteorológicas, com detecção de falhas e alarmes em tempo real. Por serem **dados críticos** (alertas de chuva forte e vento para a Defesa Civil), o banco também cuida de **integridade, segurança de acesso, auditoria à prova de adulteração e continuidade** (backup e contingência).
 
 ---
 
-## Ordem de execução
+## Como rodar (Windows)
 
-Criar um banco novo (ex.: `aps_defesa_civil`) e rodar, nesta ordem:
+### 1. Banco de dados
+1. No pgAdmin, crie o banco `aps_defesa_civil`.
+2. Clique com o botão direito no banco → **PSQL Tool** e rode (barras normais no caminho):
+   ```
+   \i 'C:/caminho/APS_Banco_de_dados/defesa_civil/rodar_tudo.sql'
+   ```
+   Ele **apaga e recria** o schema `public` e roda `01` → `05` e `07` (~2,5 min).
 
-| # | Arquivo | O que faz | Tempo aprox. |
-|---|---|---|---|
-| 1 | `01_estrutura.sql` | Tabelas, chaves, índices e view materializada | segundos |
-| 2 | `02_regras.sql` | Triggers, recepção de lotes, partições e arquivamento | segundos |
-| 3 | `03_simulador.sql` | Procedure que simula o dispositivo | segundos |
-| 4 | `04_carga_inicial.sql` | Cliente, 2 estações, sensores, regras, 6 meses de dados e arquivamento | ~1,5 min |
-| 5 | `05_consultas.sql` | Views para visualização e consultas de exemplo | segundos |
-| 6 | `06_testes_desempenho.sql` | Testes de escrita e consulta | ~2–3 min |
+> Não use a Query Tool para o `04`/`06`: o simulador faz `COMMIT` a cada lote e a Query Tool envia o arquivo inteiro como uma transação só (*invalid transaction termination*).
 
-> O `04` e o `06` precisam do **PSQL Tool** (botão direito no banco → PSQL Tool → `\i 'caminho/arquivo.sql'`), não da Query Tool:
-> o simulador faz `COMMIT` a cada lote, e a Query Tool envia o arquivo inteiro como uma única transação
-> (erro *invalid transaction termination*). O `06` também usa variáveis do `psql`.
+### 2. Painel web novo (HTML/CSS/JS puro + Node.js)
+1. Instale o **Node.js LTS** (nodejs.org).
+2. Dê dois cliques em `web\iniciar.bat`. Na 1ª vez ele instala a única dependência (`pg`) e cria o `web\config.json`.
+3. O navegador abre em **http://127.0.0.1:8080**.
 
-### Jeito mais fácil: um comando só
+| Usuário | Senha inicial | Perfil |
+|---|---|---|
+| `admin` | `Admin@2026` | Administrador (todos os clientes) |
+| `operador` | `Operador@2026` | Operador da Defesa Civil de SJC |
+| `consulta` | `Consulta@2026` | Visualizador da Defesa Civil de SJC |
 
-No PSQL Tool do banco `aps_defesa_civil` (use barras normais no caminho):
+No 1º acesso cada um é obrigado a trocar a senha.
 
-```
-\i 'C:/caminho/APS_Banco_de_dados/defesa_civil/rodar_tudo.sql'
-```
+### 3. Painel antigo (Streamlit)
+Continua funcionando: `interface\iniciar.bat` (conecta como `postgres`). Veja `interface/LEIAME.md`.
 
-Ele **apaga e recria** o schema `public` e roda do `01` ao `05` (~2 min).
+---
+
+## Arquivos
+
+| # | Arquivo | O que faz |
+|---|---|---|
+| 1 | `01_estrutura.sql` | Tabelas, chaves, índices, view materializada e tabela `configuracao` |
+| 2 | `02_regras.sql` | Triggers, recepção e validação de lotes, evento imutável, partições e arquivamento |
+| 3 | `03_simulador.sql` | Modelo do tempo, carga histórica e simulador em tempo real |
+| 4 | `04_carga_inicial.sql` | Cliente, 2 estações, sensores, regras, 6 meses de dados e arquivamento |
+| 5 | `05_consultas.sql` | Views para visualização e consultas de exemplo |
+| 6 | `06_testes_desempenho.sql` | Testes de escrita e consulta (opcional, ~5 min, PSQL Tool) |
+| 7 | `07_seguranca.sql` | Usuários, sessões, papéis, RLS, auditoria encadeada, backups |
+| – | `rodar_tudo.sql` | Recria tudo (01–05 + 07) |
+| – | `web/` | Servidor Node.js + painel web |
+| – | `ferramentas/restaurar.bat` | Restaura um backup num banco novo |
+| – | `ferramentas/dispositivo_teste.js` | Simula um datalogger real enviando para a API |
 
 ---
 
@@ -38,13 +57,57 @@ Ele **apaga e recria** o schema `public` e roda do `01` ao `05` (~2 min).
 
 | Camada | Na vida real | No projeto |
 |---|---|---|
-| Acesso do cliente | Login, senha, permissões | **Citado** no documento |
-| Coleta | Datalogger ou CLP lê os sensores e armazena | **Simulada** (`sp_simular_dispositivo`) |
-| Transmissão | 4G, LoRa, Ethernet, satélite | **Citado** no documento |
-| Formato de envio | API, HTTP, TCP/IP, FTP | **Citado**; o lote chega em JSON, como numa API |
-| Banco de dados (nuvem) | Armazenamento, regras, alarmes, histórico | **Implementado** |
+| Coleta | Datalogger ou CLP lê os sensores e armazena | Simulada (`fn_simular_leituras`) |
+| Transmissão | 4G, LoRa, Ethernet, satélite | Citado; lote em JSON por HTTP (`POST /api/ingest` com chave da estação) |
+| Servidor | API, filas, agendador | **Node.js** (`web/`): API, tempo real, agendador, backup, contingência |
+| Banco de dados | Armazenamento, regras, alarmes, histórico | **Implementado** (PostgreSQL) |
+| Acesso do cliente | Login, senha, permissões | **Implementado**: usuários, perfis, RLS por cliente |
 
-Fluxo: o dispositivo mede a cada **1 min** e transmite um lote a cada **10 min** → `fn_receber_lote` grava as leituras → as triggers validam, calculam e geram eventos.
+Fluxo: o dispositivo mede a cada **1 min** e transmite a cada **10 min** → `fn_receber_lote` valida e grava → triggers calculam e geram eventos → `NOTIFY` → o servidor avisa os navegadores (Server-Sent Events).
+
+---
+
+## Datas somente em tempo real
+
+Ninguém digita data no sistema: toda data de registro vem do **relógio do servidor**.
+
+| Onde | Como |
+|---|---|
+| Recepção de lote | `fn_receber_lote(estação, leituras)` não tem parâmetro de data: usa `now()`. A versão com data (`fn_receber_lote_interno`) é só para a carga histórica e não é liberada à aplicação |
+| Leitura com data no futuro | Rejeitada (tolerância de 2 min, configurável); a trigger da tabela também recusa INSERT direto |
+| Leitura antiga demais / mês arquivado / data inválida | Rejeitada sem derrubar o lote; vira evento `LEITURA_REJEITADA` com o motivo |
+| Reconhecimento de evento | `reconhecido_em` e `reconhecido_por` preenchidos pelo banco; valores enviados são ignorados |
+| Auditoria, sessões, configuração, backups | Datas forçadas por trigger/`DEFAULT` |
+| Partições | Criadas com 2 meses de antecedência pela manutenção diária (antes: em jan/2027 tudo falharia) |
+| Telas | A hora mostrada é a do servidor (o relógio do computador pode estar errado) |
+
+---
+
+## Segurança (07_seguranca.sql)
+
+- **O banco não confia na aplicação**: o servidor só repassa o *token* da sessão (`app.sessao`); o banco valida e descobre usuário, perfil e cliente.
+- **Senhas** com bcrypt (`pgcrypto`), política de 8+ caracteres com letras e números, troca obrigatória no 1º acesso, **bloqueio de 15 min após 5 erros**.
+- **Sessões** guardam só o hash SHA-256 do token; expiram após 60 min sem uso (máx. 8 h).
+- **Papéis de mínimo privilégio**: `aps_app` (painel), `aps_dispositivo` (só envia leituras), `aps_backup` (só lê, para o pg_dump), `aps_leitura` (relatórios).
+- **Row Level Security**: cada usuário só vê as estações do seu cliente; regras/sensores só OPERADOR/ADMIN alteram; configuração, auditoria e backups só ADMIN.
+- **Evento imutável**: só o reconhecimento pode mudar, e não pode ser desfeito.
+- **Auditoria append-only encadeada por hash**: cada linha guarda o SHA-256 da anterior; `fn_verificar_auditoria()` aponta o primeiro registro adulterado. Registra alterações com antes/depois, logins, exportações, backups e até comandos de estrutura (DDL), inclusive quem desligar uma trigger de proteção.
+- **Painel**: cookie HttpOnly/SameSite, cabeçalho anti-CSRF, Content-Security-Policy, nada de `innerHTML` com dados do banco (sem XSS).
+
+---
+
+## Continuidade: backup e queda
+
+| Situação | O que acontece |
+|---|---|
+| Backup diário | `pg_dump` (papel `aps_backup`) às 02:00, SHA-256 de cada cópia, manifesto em disco, retenção de 7 dias mantendo as 3 últimas |
+| Verificação | Recalcula o SHA-256 e lê o arquivo com `pg_restore --list` |
+| Banco fora do ar | O servidor guarda os lotes recebidos em disco (`contingencia/`) e reenvia sozinho quando o banco volta |
+| Queda de energia | `fsync`, `synchronous_commit` e `full_page_writes` ligados: nada confirmado se perde |
+| Perda do banco | `ferramentas/restaurar.bat` restaura num banco novo; depois rodar o `07` (papéis ficam fora do pg_dump) |
+| PITR (opcional) | `archive_mode = on` + `archive_command` copiando o WAL para outro disco |
+
+Testado: backup de 35 MB restaurado com as mesmas contagens e a corrente de auditoria íntegra; PostgreSQL derrubado com o dispositivo enviando → lotes na fila → reenviados ao religar, sem perda.
 
 ---
 
@@ -53,31 +116,20 @@ Fluxo: o dispositivo mede a cada **1 min** e transmite um lote a cada **10 min**
 | Tabela | Conteúdo |
 |---|---|
 | `cliente` | Defesa Civil de SJC |
-| `dispositivo` | Estações: intervalos, localização, `ativo`, `status` e `ultima_comunicacao` |
-| `sensor` | Parâmetros de cada estação com a **faixa física válida** (limites de segurança) |
+| `dispositivo` | Estações: intervalos, localização, `ativo`, `status`, `ultima_comunicacao`, hash da chave de API |
+| `sensor` | Parâmetros de cada estação com a **faixa física válida** |
 | `leitura` | 1 linha por estação por minuto, 1 coluna por parâmetro + `chuva_acumulada`. **Particionada por mês** |
 | `leitura_arquivo` | Meses antigos (mesma estrutura), com índice **BRIN** |
 | `leitura_diaria` | Resumo diário (mín/máx/média, chuva total, direção predominante) |
 | `regra_alarme` | Limites definidos pelo cliente |
-| `evento` | Log: `TRANSMISSAO_OK`, `FALHA_TRANSMISSAO`, `FALHA_SENSOR`, `ALARME` |
-| `log_arquivamento` | Auditoria do ciclo de vida |
+| `evento` | `TRANSMISSAO_OK`, `FALHA_TRANSMISSAO`, `FALHA_SENSOR`, `ALARME`, `LEITURA_REJEITADA` (+ quem/quando reconheceu) |
+| `configuracao` | Tolerâncias de data, retenção e partições futuras |
+| `usuario`, `sessao` | Acesso ao painel |
+| `auditoria` | Trilha encadeada por hash |
+| `log_arquivamento`, `log_backup` | Ciclo de vida e cópias de segurança |
 | `mv_resumo_horario` | **View materializada** com o resumo por hora |
 
----
-
-## Regras automáticas
-
-| Regra | Onde | Como funciona |
-|---|---|---|
-| Falha de sensor | `trg_leitura_antes_inserir` | Valor fora da faixa do sensor (ex.: código -9999) vira NULL; o valor original fica no evento |
-| Chuva acumulada | `trg_leitura_antes_inserir` | Soma a chuva do minuto ao acumulado do dia; zera à meia-noite |
-| Alarme | `trg_leitura_depois_inserir` | Dispara quando o valor cruza o limite da regra; no máximo 1 vez por hora por regra |
-| Status do dispositivo | `trg_leitura_depois_inserir` | `FALHA` (falha de sensor) > `ALERTA` (regra violada) > `OPERACIONAL` |
-| Transmissão OK | `fn_receber_lote` | Registrada a cada lote recebido |
-| Falha de transmissão | `fn_receber_lote` / `fn_verificar_comunicacao` | Lote atrasado mais de 10 + 5 min; ou verificação "ao vivo" |
-| Data Lifecycle | `sp_arquivar_dados` | Mantém o mês atual + o anterior; meses antigos viram resumo diário e a partição inteira vai para o arquivo (DETACH/ATTACH) |
-
-### Regras de alarme cadastradas
+## Regras de alarme cadastradas
 
 | Parâmetro | Condição | Nível |
 |---|---|---|
@@ -86,17 +138,12 @@ Fluxo: o dispositivo mede a cada **1 min** e transmite um lote a cada **10 min**
 | Temperatura do ar | > 35 °C | ALERTA |
 | Umidade do ar | < 20 % | ALERTA |
 
----
-
 ## Simulação
 
-- 2 estações (Centro e Zona Norte), 6 meses até a data da carga
-- Sazonalidade (inverno mais frio e seco), ciclo dia/noite, tardes chuvosas
-- **Dia de temporal** 5 dias antes da carga (chuva forte e rajadas de vento)
-- ~2 % dos lotes não são enviados (seguem no lote seguinte) → falha de transmissão
-- ~0,5 % das leituras com código de erro -9999 → falha de sensor
-
----
+- 2 estações (Centro e Zona Norte), 6 meses até a data da carga, e **depois continua em tempo real** (o servidor transmite a cada 10 min)
+- Clima da cidade compartilhado pelas estações (sorteio determinístico por dia): chovem nos mesmos dias
+- Sazonalidade, ciclo dia/noite, tardes chuvosas e um **dia de temporal** 5 dias antes da carga
+- ~2 % dos lotes não enviados → falha de transmissão; ~0,5 % das leituras com -9999 → falha de sensor
 
 ## Otimizações testadas
 
@@ -112,11 +159,10 @@ Fluxo: o dispositivo mede a cada **1 min** e transmite um lote a cada **10 min**
 
 Metodologia dos testes adaptada de: GRZESIK, P.; MROZEK, D. *Comparative analysis of time series databases in the context of edge computing for low power sensor networks*. ICCS 2020, LNCS v. 12141, p. 371–383. DOI: 10.1007/978-3-030-50426-7_28.
 
----
-
 ## Limitações (para citar no documento)
 
-- **Formato largo** (1 coluna por parâmetro): simples e rápido para parâmetros fixos; incluir um novo tipo de sensor exige alterar a tabela.
-- **Status** reflete a leitura mais recente; o histórico completo fica em `evento`.
-- A verificação "ao vivo" (`fn_verificar_comunicacao`) e a atualização da view materializada precisariam de um agendador (ex.: pg_cron) em produção.
-- Autenticação, transmissão e protocolos de envio não fazem parte do banco.
+- **Formato largo** (1 coluna por parâmetro): simples e rápido; um novo tipo de sensor exige alterar a tabela.
+- **Custo da validação**: validar cada leitura deixou o envio de 1 leitura por lote ~30 % mais lento; em lotes de 10 o impacto é desprezível.
+- **Agendador** no servidor Node.js (o PostgreSQL não tem agendador nativo; em produção, pg_cron).
+- **Senhas dos papéis** padrão no `07` e no `config.exemplo.json`: trocar em produção; o painel roda em HTTP local (em produção, HTTPS na frente).
+- **PITR e réplica** documentados, não configurados (exigem alterar o `postgresql.conf`).
