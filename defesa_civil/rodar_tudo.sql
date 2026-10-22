@@ -1,6 +1,7 @@
 -- =====================================================================
 -- APS - rodar_tudo.sql
--- Recria o banco do zero e roda os scripts 01 a 05, na ordem.
+-- Recria o banco do zero e roda os scripts 01 a 05 e o 07, na ordem.
+-- (o 06, de testes de desempenho, é opcional e roda à parte)
 --
 -- Como usar (pgAdmin): botão direito no banco aps_defesa_civil ->
 -- PSQL Tool -> digite (com o caminho da sua pasta, barras normais):
@@ -13,6 +14,8 @@
 \set ON_ERROR_STOP on
 SET client_min_messages TO WARNING;
 
+DROP EVENT TRIGGER IF EXISTS evt_auditar_ddl;
+DROP EVENT TRIGGER IF EXISTS evt_auditar_drop;
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;
 
@@ -26,4 +29,6 @@ CREATE SCHEMA public;
 \ir 04_carga_inicial.sql
 \echo '>> 05 - consultas'
 \ir 05_consultas.sql
+\echo '>> 07 - seguranca (usuarios, papeis, RLS, auditoria)'
+\ir 07_seguranca.sql
 \echo '>> Pronto. Banco carregado.'
