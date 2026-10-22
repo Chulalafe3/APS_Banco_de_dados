@@ -58,7 +58,9 @@ CREATE OR REPLACE PROCEDURE sp_bench_escrita(
     p_modo VARCHAR, p_id_dispositivo INTEGER, p_pontos INTEGER, p_reps INTEGER)
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_base   TIMESTAMPTZ := date_trunc('month', now()) + INTERVAL '2 months';
+    -- 1 dia atrás: o banco recusa leituras no futuro, e 1000 minutos
+    -- (~17 h) a partir daqui ainda ficam no passado
+    v_base   TIMESTAMPTZ := date_trunc('minute', now()) - INTERVAL '1 day';
     v_tam    INTEGER := CASE p_modo WHEN 'UNITARIO' THEN 1 ELSE 10 END;
     v_lote   JSONB;
     v_ini    TIMESTAMPTZ;
@@ -87,8 +89,9 @@ BEGIN
               INTO v_lote
               FROM generate_series(0, v_tam - 1) AS g;
 
-            PERFORM fn_receber_lote(p_id_dispositivo, v_lote,
-                                    v_base + make_interval(mins => i + v_tam));
+            -- versão interna: recebimento simulado logo após cada lote
+            PERFORM fn_receber_lote_interno(p_id_dispositivo, v_lote,
+                                            v_base + make_interval(mins => i + v_tam));
             COMMIT;                                   -- cada envio é uma transação
             i := i + v_tam;
         END LOOP;
@@ -109,11 +112,11 @@ $$;
 -- 1. TESTE DE ESCRITA
 --    Usa um dispositivo de bancada, removido no fim do teste
 -- ---------------------------------------------------------------------
--- garante a partição do mês usado na bancada (2 meses à frente)
-CALL sp_criar_particoes((date_trunc('month', now()) + INTERVAL '2 months')::DATE, 1);
+-- garante as partições do mês atual (e do anterior, se hoje for dia 1)
+CALL sp_criar_particoes((now() - INTERVAL '1 day')::DATE, 2);
 
 INSERT INTO dispositivo (id_cliente, nome, ativo)
-VALUES (1, 'Bancada de testes', TRUE)
+SELECT id_cliente, 'Bancada de testes', TRUE FROM dispositivo WHERE id_dispositivo = 1
 RETURNING id_dispositivo AS id_bancada \gset
 
 INSERT INTO sensor (id_dispositivo, parametro, unidade, limite_min, limite_max)

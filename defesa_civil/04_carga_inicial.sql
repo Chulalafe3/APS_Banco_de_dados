@@ -23,12 +23,14 @@ VALUES ('Defesa Civil de São José dos Campos', 'São José dos Campos', 'SP');
 -- ---------------------------------------------------------------------
 -- id_cliente buscado pelo nome (não fixo em 1): se uma execução anterior
 -- falhou, a sequência já avançou e o cliente pode ter recebido outro id
+-- simulado = TRUE: o servidor web continua gerando dados em tempo real.
+-- A Zona Norte é um pouco mais fresca (ajuste de -0,8 °C).
 INSERT INTO dispositivo (id_cliente, nome, intervalo_leitura_min, intervalo_transmissao_min,
-                         latitude, longitude)
-SELECT c.id_cliente, v.nome, 1, 10, v.lat, v.lon
+                         latitude, longitude, simulado, ajuste_temperatura_sim)
+SELECT c.id_cliente, v.nome, 1, 10, v.lat, v.lon, TRUE, v.ajuste
   FROM cliente c
- CROSS JOIN (VALUES ('Estação Centro',     -23.179400, -45.886900),
-                    ('Estação Zona Norte', -23.151000, -45.892000)) AS v(nome, lat, lon)
+ CROSS JOIN (VALUES ('Estação Centro',     -23.179400, -45.886900,  0.0),
+                    ('Estação Zona Norte', -23.151000, -45.892000, -0.8)) AS v(nome, lat, lon, ajuste)
  WHERE c.nome = 'Defesa Civil de São José dos Campos'
  ORDER BY v.nome;
 
@@ -87,8 +89,7 @@ BEGIN
         p_id_dispositivo     => v_norte,
         p_inicio             => date_trunc('day', now() - INTERVAL '6 months'),
         p_fim                => date_trunc('minute', now()),
-        p_dia_temporal       => CURRENT_DATE - 5,
-        p_ajuste_temperatura => -0.8);       -- Zona Norte um pouco mais fresca
+        p_dia_temporal       => CURRENT_DATE - 5);
 END $$;
 
 ANALYZE;

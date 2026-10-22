@@ -40,7 +40,10 @@ CREATE TABLE dispositivo (
     ativo                     BOOLEAN      NOT NULL DEFAULT TRUE,
     status                    VARCHAR(12)  NOT NULL DEFAULT 'OPERACIONAL'
                               CHECK (status IN ('OPERACIONAL', 'ALERTA', 'FALHA')),
-    ultima_comunicacao        TIMESTAMPTZ
+    ultima_comunicacao        TIMESTAMPTZ,
+    -- simulação (estações de demonstração geradas pelo simulador)
+    simulado                  BOOLEAN      NOT NULL DEFAULT FALSE,
+    ajuste_temperatura_sim    NUMERIC(4,2) NOT NULL DEFAULT 0
 );
 
 -- ---------------------------------------------------------------------
@@ -143,18 +146,25 @@ CREATE TABLE regra_alarme (
 -- ---------------------------------------------------------------------
 -- EVENTO (log do dispositivo)
 -- TRANSMISSAO_OK | FALHA_TRANSMISSAO | FALHA_SENSOR | ALARME
+-- | LEITURA_REJEITADA (data inválida, no futuro, antiga demais ou sem
+--   partição: a leitura é descartada, o resto do lote é gravado)
+-- O evento é imutável: só o reconhecimento pode mudar, e quem/quando
+-- reconheceu é preenchido pelo banco (02_regras.sql e 07_seguranca.sql).
 -- ---------------------------------------------------------------------
 CREATE TABLE evento (
     id_evento       BIGSERIAL    PRIMARY KEY,
     id_dispositivo  INTEGER      NOT NULL REFERENCES dispositivo(id_dispositivo),
     data_hora       TIMESTAMPTZ  NOT NULL,
     tipo            VARCHAR(20)  NOT NULL CHECK (tipo IN (
-                        'TRANSMISSAO_OK', 'FALHA_TRANSMISSAO', 'FALHA_SENSOR', 'ALARME')),
+                        'TRANSMISSAO_OK', 'FALHA_TRANSMISSAO', 'FALHA_SENSOR', 'ALARME',
+                        'LEITURA_REJEITADA')),
     parametro       VARCHAR(30),
     valor           NUMERIC,
     id_regra        INTEGER      REFERENCES regra_alarme(id_regra),
     mensagem        VARCHAR(250),
-    reconhecido     BOOLEAN      NOT NULL DEFAULT FALSE
+    reconhecido     BOOLEAN      NOT NULL DEFAULT FALSE,
+    reconhecido_em  TIMESTAMPTZ,                   -- relógio do servidor
+    reconhecido_por INTEGER                        -- usuário (FK no 07)
 );
 
 CREATE INDEX idx_evento_dispositivo_hora ON evento (id_dispositivo, data_hora);
@@ -163,6 +173,24 @@ CREATE INDEX idx_evento_dispositivo_hora ON evento (id_dispositivo, data_hora);
 -- Fica pequeno mesmo com milhares de TRANSMISSAO_OK na tabela.
 CREATE INDEX idx_evento_pendentes ON evento (id_dispositivo, data_hora)
     WHERE NOT reconhecido AND tipo <> 'TRANSMISSAO_OK';
+
+-- ---------------------------------------------------------------------
+-- CONFIGURACAO (parâmetros das regras do banco, editáveis e auditados)
+-- ---------------------------------------------------------------------
+CREATE TABLE configuracao (
+    chave        VARCHAR(40)   PRIMARY KEY,
+    valor        NUMERIC       NOT NULL CHECK (valor >= 0),
+    unidade      VARCHAR(10)   NOT NULL,
+    descricao    VARCHAR(200)  NOT NULL,
+    alterado_em  TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+INSERT INTO configuracao (chave, valor, unidade, descricao) VALUES
+    ('tolerancia_futuro',      2, 'min',  'Leitura com data à frente do relógio do servidor além disto é rejeitada'),
+    ('atraso_maximo',          7, 'dias', 'Leitura mais antiga que isto (em relação ao recebimento) é rejeitada'),
+    ('tolerancia_transmissao', 5, 'min',  'Atraso além do intervalo de transmissão que caracteriza falha'),
+    ('meses_particoes_futuras',2, 'meses','Partições mensais criadas com antecedência pela manutenção'),
+    ('meses_dados_recentes',   2, 'meses','Meses mantidos na tabela leitura antes do arquivamento');
 
 -- ---------------------------------------------------------------------
 -- LOG_ARQUIVAMENTO (auditoria do ciclo de vida dos dados)

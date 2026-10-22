@@ -21,6 +21,13 @@ DECLARE
     v_inicio_dia  TIMESTAMPTZ;
     v_acum_ant    NUMERIC;
 BEGIN
+    -- defesa em profundidade: mesmo um INSERT direto (fora do
+    -- fn_receber_lote) não grava leitura com data no futuro
+    IF NEW.data_hora > now() + make_interval(mins => fn_config('tolerancia_futuro')::INT) THEN
+        RAISE EXCEPTION 'Leitura com data no futuro (%) recusada; relógio do servidor: %',
+                        NEW.data_hora, now();
+    END IF;
+
     -- a) falha de sensor
     FOR s IN
         SELECT parametro, unidade, limite_min, limite_max
@@ -160,34 +167,185 @@ AFTER INSERT ON leitura
 FOR EACH ROW EXECUTE FUNCTION fn_leitura_depois_inserir();
 
 -- =====================================================================
+-- 2b. EVENTO IMUTÁVEL + RECONHECIMENTO + AVISO EM TEMPO REAL
+--    - Um evento registrado não pode ser alterado nem "desreconhecido";
+--      só pode passar de não reconhecido para reconhecido.
+--    - Quem e quando reconheceu são preenchidos pelo banco (relógio do
+--      servidor e usuário da sessão), nunca digitados.
+--    - Alarmes e falhas novos avisam o painel (NOTIFY aps_tempo_real).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION fn_evento_antes_alterar()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (NEW.id_dispositivo, NEW.data_hora, NEW.tipo, NEW.parametro, NEW.valor,
+        NEW.id_regra, NEW.mensagem)
+       IS DISTINCT FROM
+       (OLD.id_dispositivo, OLD.data_hora, OLD.tipo, OLD.parametro, OLD.valor,
+        OLD.id_regra, OLD.mensagem) THEN
+        RAISE EXCEPTION 'Evento % é imutável: só o reconhecimento pode ser registrado', OLD.id_evento;
+    END IF;
+
+    IF OLD.reconhecido AND NOT NEW.reconhecido THEN
+        RAISE EXCEPTION 'Evento % já foi reconhecido e não pode voltar a pendente', OLD.id_evento;
+    END IF;
+
+    IF NEW.reconhecido AND NOT OLD.reconhecido THEN
+        NEW.reconhecido_em  := now();
+        NEW.reconhecido_por := NULLIF(current_setting('app.usuario_id', TRUE), '')::INTEGER;
+    ELSE
+        NEW.reconhecido_em  := OLD.reconhecido_em;     -- não aceita data digitada
+        NEW.reconhecido_por := OLD.reconhecido_por;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_evento_antes_alterar
+BEFORE UPDATE ON evento
+FOR EACH ROW EXECUTE FUNCTION fn_evento_antes_alterar();
+
+CREATE OR REPLACE FUNCTION fn_evento_antes_inserir()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.reconhecido     := FALSE;      -- nasce pendente
+    NEW.reconhecido_em  := NULL;
+    NEW.reconhecido_por := NULL;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_evento_antes_inserir
+BEFORE INSERT ON evento
+FOR EACH ROW EXECUTE FUNCTION fn_evento_antes_inserir();
+
+CREATE OR REPLACE FUNCTION fn_evento_avisar()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.tipo <> 'TRANSMISSAO_OK' AND NEW.data_hora > now() - INTERVAL '30 minutes' THEN
+        PERFORM pg_notify('aps_tempo_real', json_build_object(
+                    'tipo', 'evento', 'id_evento', NEW.id_evento,
+                    'id_dispositivo', NEW.id_dispositivo, 'evento', NEW.tipo,
+                    'mensagem', NEW.mensagem)::TEXT);
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_evento_avisar
+AFTER INSERT ON evento
+FOR EACH ROW EXECUTE FUNCTION fn_evento_avisar();
+
+-- Reconhece eventos (marca como vistos). Retorna quantos mudaram.
+CREATE OR REPLACE FUNCTION fn_reconhecer_eventos(p_ids BIGINT[])
+RETURNS INTEGER AS $$
+DECLARE
+    v_qtd INTEGER;
+BEGIN
+    UPDATE evento SET reconhecido = TRUE
+     WHERE id_evento = ANY (p_ids) AND NOT reconhecido AND tipo <> 'TRANSMISSAO_OK';
+    GET DIAGNOSTICS v_qtd = ROW_COUNT;
+    RETURN v_qtd;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =====================================================================
 -- 3. RECEPÇÃO DE LOTE
 --    Ponto de entrada dos dados: o dispositivo envia um lote (JSON, como
 --    faria por uma API) com as leituras acumuladas desde o último envio.
---    - registra TRANSMISSAO_OK
---    - detecta FALHA_TRANSMISSAO quando o lote chega atrasado
---      (mais que o intervalo de transmissão + 5 min de tolerância)
+--
+--    DATA SOMENTE EM TEMPO REAL: quem chama fn_receber_lote NÃO informa a
+--    data de recebimento; o banco usa o próprio relógio (now()). A versão
+--    com data informada (fn_receber_lote_interno) existe só para a carga
+--    histórica do simulador e não é liberada para a aplicação (07).
+--
+--    Cada leitura é validada antes de gravar. Uma leitura ruim NÃO derruba
+--    o lote: ela é descartada e registrada como LEITURA_REJEITADA.
+--      - data ausente ou em formato inválido
+--      - data no futuro (além da tolerância, em relação ao recebimento)
+--      - data antiga demais (além do atraso máximo configurado)
+--      - mês sem partição ativa (ex.: mês já arquivado)
+--    Leituras repetidas (reenvio) são ignoradas antes das triggers, para
+--    não gerar eventos de falha de sensor "fantasmas".
 --
 --    Exemplo de lote:
 --    [{"data_hora":"2026-10-18T15:01:00-03:00","temperatura_ar":24.3,
 --      "umidade_ar":68.0,"chuva":0.4,"direcao_vento":135,
 --      "velocidade_vento":3.2,"radiacao_solar":512}, ...]
 -- =====================================================================
-CREATE OR REPLACE FUNCTION fn_receber_lote(
+
+-- versão antiga (data de recebimento informada pelo chamador)
+DROP FUNCTION IF EXISTS fn_receber_lote(INTEGER, JSONB, TIMESTAMPTZ);
+
+-- parâmetro numérico da tabela configuracao
+CREATE OR REPLACE FUNCTION fn_config(p_chave VARCHAR)
+RETURNS NUMERIC
+LANGUAGE sql STABLE AS $$
+    SELECT valor FROM configuracao WHERE chave = p_chave
+$$;
+
+-- texto -> timestamptz sem derrubar o lote se o formato for inválido
+CREATE OR REPLACE FUNCTION fn_texto_para_data(p_texto TEXT)
+RETURNS TIMESTAMPTZ
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    IF p_texto IS NULL OR p_texto !~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}' THEN
+        RETURN NULL;
+    END IF;
+    RETURN p_texto::TIMESTAMPTZ;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
+
+-- valor JSON -> numeric (número ou texto numérico; o resto vira NULL)
+CREATE OR REPLACE FUNCTION fn_json_numero(p_valor JSONB)
+RETURNS NUMERIC
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE jsonb_typeof(p_valor)
+                WHEN 'number' THEN (p_valor #>> '{}')::NUMERIC
+                WHEN 'string' THEN CASE WHEN (p_valor #>> '{}') ~ '^\s*-?\d+(\.\d+)?\s*$'
+                                        THEN (p_valor #>> '{}')::NUMERIC END
+           END
+$$;
+
+-- a partição do mês está ligada à tabela leitura (e não arquivada)?
+CREATE OR REPLACE FUNCTION fn_particao_ativa(p_data TIMESTAMPTZ)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_inherits i
+          JOIN pg_class c ON c.oid = i.inhrelid
+         WHERE i.inhparent = 'leitura'::REGCLASS
+           AND c.relname = 'leitura_' || to_char(p_data AT TIME ZONE 'America/Sao_Paulo', 'YYYYMM'))
+$$;
+
+CREATE OR REPLACE FUNCTION fn_receber_lote_interno(
     p_id_dispositivo  INTEGER,
     p_leituras        JSONB,
-    p_recebido_em     TIMESTAMPTZ DEFAULT now())
+    p_recebido_em     TIMESTAMPTZ)
 RETURNS INTEGER AS $$
 DECLARE
-    v_ultima      TIMESTAMPTZ;
-    v_intervalo   SMALLINT;
-    v_minutos     NUMERIC;
-    v_qtd         INTEGER;
+    v_ultima       TIMESTAMPTZ;
+    v_intervalo    SMALLINT;
+    v_minutos      NUMERIC;
+    v_tol_futuro   INTERVAL := make_interval(mins => fn_config('tolerancia_futuro')::INT);
+    v_atraso_max   INTERVAL := make_interval(days => fn_config('atraso_maximo')::INT);
+    v_tol_transm   INTEGER  := fn_config('tolerancia_transmissao')::INT;
+    v_qtd          INTEGER  := 0;
+    v_total        INTEGER;
+    v_repetidas    INTEGER;
+    v_rejeitadas   INTEGER;
 BEGIN
+    IF jsonb_typeof(p_leituras) IS DISTINCT FROM 'array' THEN
+        RAISE EXCEPTION 'Lote inválido: esperado um array JSON de leituras';
+    END IF;
+
     SELECT ultima_comunicacao, intervalo_transmissao_min
       INTO v_ultima, v_intervalo
       FROM dispositivo
      WHERE id_dispositivo = p_id_dispositivo AND ativo
-       FOR UPDATE;
+       FOR UPDATE;                         -- um lote por vez por dispositivo
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Dispositivo % não existe ou está inativo', p_id_dispositivo;
@@ -195,7 +353,7 @@ BEGIN
 
     -- falha de transmissão: lote atrasado
     IF v_ultima IS NOT NULL
-       AND p_recebido_em - v_ultima > make_interval(mins => v_intervalo + 5)
+       AND p_recebido_em - v_ultima > make_interval(mins => v_intervalo + v_tol_transm)
        -- não duplica se a verificação ao vivo já registrou a falha
        AND NOT EXISTS (SELECT 1 FROM evento e
                         WHERE e.id_dispositivo = p_id_dispositivo
@@ -208,40 +366,115 @@ BEGIN
                        'Dados recuperados no lote seguinte.', v_minutos, v_intervalo));
     END IF;
 
-    -- grava as leituras em ordem de tempo (as triggers rodam em cada linha)
-    INSERT INTO leitura (id_dispositivo, data_hora, temperatura_ar, umidade_ar, chuva,
-                         direcao_vento, velocidade_vento, radiacao_solar, recebido_em)
-    SELECT p_id_dispositivo, x.data_hora, x.temperatura_ar, x.umidade_ar, x.chuva,
-           x.direcao_vento, x.velocidade_vento, x.radiacao_solar, p_recebido_em
-      FROM jsonb_to_recordset(p_leituras) AS x(
-               data_hora TIMESTAMPTZ, temperatura_ar NUMERIC, umidade_ar NUMERIC,
-               chuva NUMERIC, direcao_vento NUMERIC, velocidade_vento NUMERIC,
-               radiacao_solar NUMERIC)
-     ORDER BY x.data_hora
-    ON CONFLICT (id_dispositivo, data_hora) DO NOTHING;   -- reenvio não duplica
+    -- Uma única instrução (CTEs):
+    --   lote   -> lê o JSON (formato inválido vira NULL, não derruba o lote)
+    --   meses  -> partição ativa? (consulta 1 vez por mês, não por leitura)
+    --   class  -> motivo de rejeição de cada leitura (NULL = válida)
+    --   rej    -> um evento LEITURA_REJEITADA por motivo, com quantidade
+    --   ins    -> grava as válidas e NOVAS, em ordem de tempo. Repetidas
+    --             (já no banco ou duplicadas no lote) ficam de fora ANTES
+    --             das triggers: o reenvio não gera evento nenhum.
+    WITH lote AS MATERIALIZED (
+        SELECT fn_texto_para_data(x ->> 'data_hora')    AS data_hora,
+               x ->> 'data_hora'                        AS texto_data,
+               fn_json_numero(x -> 'temperatura_ar')    AS temperatura_ar,
+               fn_json_numero(x -> 'umidade_ar')        AS umidade_ar,
+               fn_json_numero(x -> 'chuva')             AS chuva,
+               fn_json_numero(x -> 'direcao_vento')     AS direcao_vento,
+               fn_json_numero(x -> 'velocidade_vento')  AS velocidade_vento,
+               fn_json_numero(x -> 'radiacao_solar')    AS radiacao_solar
+          FROM jsonb_array_elements(p_leituras) AS x
+    ),
+    meses AS MATERIALIZED (
+        SELECT m.mes, fn_particao_ativa(m.mes) AS ativa
+          FROM (SELECT DISTINCT date_trunc('month', data_hora AT TIME ZONE 'America/Sao_Paulo')
+                                    AT TIME ZONE 'America/Sao_Paulo' AS mes
+                  FROM lote WHERE data_hora IS NOT NULL) m
+    ),
+    class AS MATERIALIZED (
+        SELECT l.*,
+               CASE WHEN l.data_hora IS NULL                        THEN 'data ausente ou inválida'
+                    WHEN l.data_hora > p_recebido_em + v_tol_futuro THEN 'data no futuro'
+                    WHEN l.data_hora < p_recebido_em - v_atraso_max THEN 'data antiga demais'
+                    WHEN NOT m.ativa                                THEN 'mês sem partição ativa'
+               END AS motivo
+          FROM lote l
+          LEFT JOIN meses m
+            ON m.mes = date_trunc('month', l.data_hora AT TIME ZONE 'America/Sao_Paulo')
+                           AT TIME ZONE 'America/Sao_Paulo'
+    ),
+    rej AS (
+        INSERT INTO evento (id_dispositivo, data_hora, tipo, valor, mensagem)
+        SELECT p_id_dispositivo, p_recebido_em, 'LEITURA_REJEITADA', COUNT(*),
+               left(format('%s leitura(s) rejeitada(s): %s (ex.: %s). O restante do lote foi gravado.',
+                           COUNT(*), motivo, MIN(COALESCE(texto_data, '(sem data)'))), 250)
+          FROM class
+         WHERE motivo IS NOT NULL
+         GROUP BY motivo
+        RETURNING valor
+    ),
+    ins AS (
+        INSERT INTO leitura (id_dispositivo, data_hora, temperatura_ar, umidade_ar, chuva,
+                             direcao_vento, velocidade_vento, radiacao_solar, recebido_em)
+        SELECT p_id_dispositivo, t.data_hora, t.temperatura_ar, t.umidade_ar, t.chuva,
+               t.direcao_vento, t.velocidade_vento, t.radiacao_solar, p_recebido_em
+          FROM (SELECT DISTINCT ON (data_hora) *
+                  FROM class WHERE motivo IS NULL
+                 ORDER BY data_hora) t
+         WHERE NOT EXISTS (SELECT 1 FROM leitura l
+                            WHERE l.id_dispositivo = p_id_dispositivo
+                              AND l.data_hora = t.data_hora)
+         ORDER BY t.data_hora
+        ON CONFLICT (id_dispositivo, data_hora) DO NOTHING
+        RETURNING 1
+    )
+    SELECT (SELECT COUNT(*) FROM lote),
+           COALESCE((SELECT SUM(valor) FROM rej), 0),
+           (SELECT COUNT(*) FROM ins)
+      INTO v_total, v_rejeitadas, v_qtd;
 
-    GET DIAGNOSTICS v_qtd = ROW_COUNT;
+    v_repetidas := v_total - v_rejeitadas - v_qtd;
 
     INSERT INTO evento (id_dispositivo, data_hora, tipo, valor, mensagem)
     VALUES (p_id_dispositivo, p_recebido_em, 'TRANSMISSAO_OK', v_qtd,
-            format('Lote recebido com %s leituras.', v_qtd));
+            format('Lote recebido com %s leituras (%s gravadas, %s repetidas, %s rejeitadas).',
+                   v_total, v_qtd, v_repetidas, v_rejeitadas));
 
     UPDATE dispositivo
        SET ultima_comunicacao = p_recebido_em
      WHERE id_dispositivo = p_id_dispositivo;
 
+    -- aviso em tempo real para o painel (LISTEN aps_tempo_real), só para
+    -- dados "ao vivo" (a carga histórica não gera aviso)
+    IF p_recebido_em > now() - INTERVAL '5 minutes' THEN
+        PERFORM pg_notify('aps_tempo_real', json_build_object(
+                    'tipo', 'lote', 'id_dispositivo', p_id_dispositivo,
+                    'gravadas', v_qtd, 'rejeitadas', v_rejeitadas)::TEXT);
+    END IF;
+
     RETURN v_qtd;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Versão pública: a data de recebimento é SEMPRE o relógio do servidor
+CREATE OR REPLACE FUNCTION fn_receber_lote(
+    p_id_dispositivo  INTEGER,
+    p_leituras        JSONB)
+RETURNS INTEGER
+LANGUAGE sql AS $$
+    SELECT fn_receber_lote_interno(p_id_dispositivo, p_leituras, now())
+$$;
 
 -- =====================================================================
 -- 4. VERIFICAÇÃO DE COMUNICAÇÃO "AO VIVO"
 --    Em produção roda a cada poucos minutos (agendador). Marca FALHA nos
 --    dispositivos que passaram do prazo sem enviar lote.
 -- =====================================================================
-CREATE OR REPLACE FUNCTION fn_verificar_comunicacao(p_agora TIMESTAMPTZ DEFAULT now())
+DROP FUNCTION IF EXISTS fn_verificar_comunicacao(TIMESTAMPTZ);
+CREATE OR REPLACE FUNCTION fn_verificar_comunicacao()
 RETURNS INTEGER AS $$
 DECLARE
+    p_agora TIMESTAMPTZ := now();          -- relógio do servidor, nunca informado
     d       RECORD;
     v_qtd   INTEGER := 0;
     v_min   NUMERIC;
@@ -250,7 +483,8 @@ BEGIN
         SELECT * FROM dispositivo
          WHERE ativo
            AND ultima_comunicacao IS NOT NULL
-           AND p_agora - ultima_comunicacao > make_interval(mins => intervalo_transmissao_min + 5)
+           AND p_agora - ultima_comunicacao > make_interval(mins => intervalo_transmissao_min
+                                                         + fn_config('tolerancia_transmissao')::INT)
     LOOP
         CONTINUE WHEN EXISTS (SELECT 1 FROM evento e
                                WHERE e.id_dispositivo = d.id_dispositivo
@@ -295,6 +529,17 @@ BEGIN
 END;
 $$;
 
+-- Manutenção: garante o mês atual e os N meses seguintes (configuração
+-- meses_particoes_futuras). Roda no agendador do servidor e no
+-- arquivamento, para que a virada do mês nunca encontre a tabela sem
+-- partição (antes: em jan/2027 toda transmissão falharia).
+CREATE OR REPLACE PROCEDURE sp_manter_particoes()
+LANGUAGE plpgsql AS $$
+BEGIN
+    CALL sp_criar_particoes(CURRENT_DATE, 1 + fn_config('meses_particoes_futuras')::INT);
+END;
+$$;
+
 -- =====================================================================
 -- 6. ATUALIZAÇÃO DA VIEW MATERIALIZADA
 -- =====================================================================
@@ -318,13 +563,13 @@ $$;
 --      3) ATTACH na tabela leitura_arquivo
 --    O mês inteiro muda de tabela de uma vez, sem DELETE linha a linha.
 -- =====================================================================
-CREATE OR REPLACE PROCEDURE sp_arquivar_dados(
-    p_referencia    DATE    DEFAULT CURRENT_DATE,
-    p_meses_manter  INTEGER DEFAULT 2)
+DROP PROCEDURE IF EXISTS sp_arquivar_dados(DATE, INTEGER);
+CREATE OR REPLACE PROCEDURE sp_arquivar_dados()
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_corte   DATE := (date_trunc('month', p_referencia)
-                       - make_interval(months => p_meses_manter - 1))::DATE;
+    -- referência = hoje no relógio do servidor (não é informada)
+    v_corte   DATE := (date_trunc('month', CURRENT_DATE)
+                       - make_interval(months => fn_config('meses_dados_recentes')::INT - 1))::DATE;
     p         RECORD;
     v_mes     DATE;
     v_ini     TIMESTAMPTZ;
@@ -383,6 +628,7 @@ BEGIN
         RAISE NOTICE 'Arquivado %: % leituras, % dias resumidos.', p.relname, v_linhas, v_dias;
     END LOOP;
 
+    CALL sp_manter_particoes();
     CALL sp_atualizar_resumo_horario();
 END;
 $$;
