@@ -1,0 +1,16 @@
+{
+  "name": "aps-painel-defesa-civil",
+  "version": "2.0.0",
+  "description": "Painel web (HTML/CSS/JS puro) e API em Node.js para o banco de telemetria da Defesa Civil de SJC",
+  "main": "servidor.js",
+  "private": true,
+  "scripts": {
+    "start": "node servidor.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}

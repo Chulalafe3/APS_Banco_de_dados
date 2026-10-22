@@ -1,0 +1,33 @@
+{
+  "porta": 8080,
+  "host": "127.0.0.1",
+
+  "banco": {
+    "host": "localhost",
+    "porta": 5432,
+    "nome": "aps_defesa_civil"
+  },
+
+  "papeis": {
+    "app":         { "usuario": "aps_app",         "senha": "aps_app_2026" },
+    "dispositivo": { "usuario": "aps_dispositivo", "senha": "aps_disp_2026" },
+    "backup":      { "usuario": "aps_backup",      "senha": "aps_backup_2026" }
+  },
+
+  "simulador": {
+    "ativo": true,
+    "intervalo_min": 10
+  },
+
+  "backup": {
+    "pasta": "../backups",
+    "hora_diaria": "02:00",
+    "retencao_dias": 7,
+    "minimo_manter": 3,
+    "pg_bin": ""
+  },
+
+  "contingencia": {
+    "pasta": "../contingencia"
+  }
+}

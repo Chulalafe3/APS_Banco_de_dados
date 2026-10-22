@@ -1,2 +1,6 @@
 defesa_civil/interface/.streamlit/secrets.toml
 __pycache__/
+node_modules/
+defesa_civil/web/config.json
+defesa_civil/backups/
+defesa_civil/contingencia/
