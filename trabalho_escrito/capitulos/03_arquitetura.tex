@@ -1,0 +1,39 @@
+% =====================================================================
+\chapter{Plano de desenvolvimento, arquitetura e requisitos}\label{cap:arquitetura}
+% =====================================================================
+
+O problema foi organizado com o método 5W2H, já usado pelo grupo: o quê (receber e guardar leituras que geram alertas, com garantias de dado crítico), por quê (uma leitura perdida ou adulterada atrasa um alerta), onde (estações em campo, servidor da Defesa Civil e navegador dos operadores), quando (uma leitura por minuto e um lote a cada 10 minutos, sem parar), quem (dispositivos, operadores, órgãos de consulta e administrador), como (PostgreSQL com regras e segurança internas, servidor Node.js e painel web) e quanto (só software livre). Em seguida, a primeira versão do banco foi executada do zero e submetida a casos de borda; o \autoref{qua:diagnostico} resume os problemas encontrados, que orientaram as melhorias. Cada melhoria foi feita numa ramificação própria no GitHub e testada recriando o banco do zero.
+
+\begin{quadro}[htb]
+  \caption{Problemas encontrados na primeira versão}\label{qua:diagnostico}
+  \footnotesize
+  \begin{tabularx}{\textwidth}{|L{5.9cm}|Y|}
+    \hline
+    \textbf{Problema observado} & \textbf{Risco para dados críticos} \\ \hline
+    Partições criadas só na carga, até dezembro de 2026 & Toda transmissão falharia a partir de janeiro de 2027 \\ \hline
+    Uma leitura com data inválida derrubava o lote inteiro & Uma leitura ruim descartava as outras nove \\ \hline
+    Leituras com data no futuro eram aceitas; data de recebimento informada pelo chamador & Dado com data falsa entrava no histórico \\ \hline
+    Reenvio de lote já gravado gerava falha de sensor & O log registrava falhas que não aconteceram \\ \hline
+    Todos os acessos com o superusuário \texttt{postgres} & Sem confidencialidade nem separação de funções \\ \hline
+    Sem registro de quem alterou regras ou reconheceu eventos & Um limite de alarme podia ser elevado sem rastro \\ \hline
+    Sem backup e recuperação & Uma falha de disco apagaria o histórico \\ \hline
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+\section{Arquitetura}
+
+A arquitetura segue as camadas sensor, borda e nuvem de \textcite{grzesik2020}, com um servidor de aplicação entre o banco e os usuários (\autoref{fig:arquitetura}). Cada estação mede a cada minuto e envia um lote em JSON a cada dez minutos, identificado por uma chave própria. O servidor recebe os lotes, atende o painel, envia atualizações em tempo real e executa tarefas agendadas. O banco concentra as regras: valida cada leitura, gera eventos e alarmes, controla o acesso e registra a auditoria.
+
+\begin{figure}[htb]
+  \caption{Arquitetura do sistema}\label{fig:arquitetura}
+  \centering
+  \resizebox{0.92\textwidth}{!}{\input{figuras/arquitetura}}
+  \fonte{Elaborado pelos autores (2026), adaptado de \textcite{grzesik2020}.}
+\end{figure}
+
+A decisão central é que o banco \textbf{não confia na aplicação}: o servidor se conecta com papéis de privilégio mínimo e repassa apenas o \textit{token} da sessão do usuário; é o banco que o valida e descobre quem é o usuário, seu perfil e as estações que pode ver. Mesmo com o servidor web comprometido, um invasor não se passa por outro usuário sem um \textit{token} válido.
+
+\section{Metodologia de simulação e testes}
+
+Um simulador gera leituras realistas (ciclo dia e noite, sazonalidade, tardes chuvosas e um dia de temporal), com cerca de 2\,\% de lotes atrasados e 0,5\,\% de leituras com o código de erro $-9999$. A carga cobre seis meses; depois, o servidor continua transmitindo em tempo real. Os testes foram de segurança (tentar burlar cada regra, inclusive como superusuário), de continuidade (derrubar o banco, fazer e restaurar backups) e de desempenho, com a metodologia de \textcite{grzesik2020}: escrita de 1.000 pontos, um por envio e em lotes de dez, e consultas de agregação repetidas 500 vezes em quatro cenários, antes e depois das melhorias, no mesmo ambiente.

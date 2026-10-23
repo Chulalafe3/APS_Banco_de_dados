@@ -1,0 +1,44 @@
+% =====================================================================
+\chapter[Por que o protótipo atende a dados críticos]{Por que o protótipo atende a dados \mbox{críticos}}\label{cap:criticos}
+% =====================================================================
+
+Um sistema serve a dados críticos quando cada uma das propriedades da \autoref{sec:fund-criticos} (integridade, confidencialidade, disponibilidade e rastreabilidade) é garantida por um mecanismo concreto, e quando esse mecanismo resiste a quem tenta contorná-lo. O \autoref{qua:criticos} relaciona cada ameaça ao mecanismo implementado e ao teste que comprova seu funcionamento; os testes estão detalhados no \autoref{cap:resultados}.
+
+\begin{quadro}[htbp]
+  \caption{Garantias de dados críticos no protótipo}\label{qua:criticos}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{|L{2.0cm}|L{3.4cm}|Y|L{1.3cm}|}
+    \hline
+    \textbf{Propriedade} & \textbf{Ameaça} & \textbf{Mecanismo} & \textbf{Teste} \\ \hline
+    \multirow{4}{2.0cm}{Integridade}
+      & Leitura com data errada no relógio do equipamento & Validação por leitura contra o relógio do servidor; rejeição registrada, sem descartar o lote & S08, S07 \\ \cline{2-4}
+      & Aplicação grava dado com data escolhida por ela & Função pública sem parâmetro de data; versão com data negada aos papéis da aplicação & S06 \\ \cline{2-4}
+      & Valor inválido do sensor ($-9999$) contamina médias & Faixa física por sensor; valor anulado e evento registrado & Carga \\ \cline{2-4}
+      & Alteração de evento já registrado & Evento imutável; só o reconhecimento muda, com data e usuário do banco & S10 \\ \hline
+    \multirow{3}{2.0cm}{Confidencia\-lidade}
+      & Servidor web invadido & Papéis de mínimo privilégio; banco valida o \textit{token} da sessão a cada transação & S01, S02 \\ \cline{2-4}
+      & Usuário vê dados de outro cliente & RLS por cliente em todas as tabelas de dados & S01, S03 \\ \cline{2-4}
+      & Senha descoberta por força bruta & bcrypt; bloqueio de 15 min após 5 erros; sessão só como hash & S11 \\ \hline
+    \multirow{2}{2.0cm}{Rastreabi\-lidade}
+      & Limite de alarme elevado sem deixar rastro & Auditoria com antes e depois, usuário, IP e data do servidor & S04 \\ \cline{2-4}
+      & Apagar ou alterar a própria auditoria & Trilha somente de inclusão, encadeada por SHA-256; DDL também auditado & S12, S13 \\ \hline
+    \multirow{4}{2.0cm}{Disponi\-bilidade}
+      & Virada do mês sem partição & Criação automática das partições futuras & S09 \\ \cline{2-4}
+      & Banco fora do ar & Fila de contingência em disco com reenvio automático & C1 \\ \cline{2-4}
+      & Perda do servidor ou erro humano & Backup diário verificado por SHA-256, retenção e restauração testada & C2, C3 \\ \cline{2-4}
+      & Queda de energia & WAL com \texttt{fsync} e \texttt{synchronous\_commit} ligados & Config. \\ \hline
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+Quatro decisões de projeto explicam por que essas garantias são confiáveis, e não apenas declaradas.
+
+\textbf{As regras ficam no banco.} Validação, eventos, perfis e auditoria são implementados em PL/pgSQL, com \textit{triggers} e políticas que valem para qualquer cliente do banco: o painel novo, o painel antigo em Streamlit, um script ou uma ferramenta de administração. Isso segue a ideia de que o SGBD deve concentrar as restrições de integridade e de autorização \parencite{elmasri2018}. Os papéis da aplicação nem sequer têm permissão de inclusão direta nas tabelas de leituras e eventos; só podem chamar as funções que aplicam as regras.
+
+\textbf{O banco não confia na aplicação.} Em vez de receber da aplicação o número do usuário, o que permitiria a um servidor comprometido se passar por qualquer pessoa, o banco recebe o \textit{token} da sessão e o valida na tabela de sessões, onde só o hash está guardado. O isolamento por cliente usa o mesmo mecanismo. Assim, o servidor web é tratado como uma camada potencialmente hostil, aplicando o mínimo privilégio de \textcite{saltzer1975} também entre aplicação e banco.
+
+\textbf{O tempo é do servidor.} Toda data de registro (recebimento, reconhecimento, auditoria, sessão, configuração e backup) vem do relógio do servidor, e as datas das leituras, que vêm do equipamento, são conferidas contra ele. Em dados críticos, a ordem e o momento dos fatos fazem parte do dado: saber que o alarme de chuva foi reconhecido às 15h12, e por quem, só tem valor se ninguém puder escrever outra hora.
+
+\textbf{A rastreabilidade é verificável.} Uma trilha de auditoria comum pode ser editada por quem tem acesso ao banco. A trilha encadeada por hash \parencite{schneier1999,haber1991} não impede um superusuário de alterar uma linha, mas torna essa alteração detectável e aponta onde ela ocorreu. O próprio ato de desligar a proteção fica registrado como comando de estrutura. Combinada com a cópia de segurança, que guarda a trilha num momento anterior, essa verificação permite reconstruir o que foi alterado.
+
+Essas medidas também atendem ao que a LGPD exige para os dados pessoais dos usuários (nome, login e endereço IP): controle de acesso, registro das operações e proteção contra acessos não autorizados \parencite{lgpd2018}. As senhas não são guardadas em forma recuperável, e a auditoria nunca registra a senha nem o seu hash, apenas o fato de que ela foi alterada.

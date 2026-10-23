@@ -1,0 +1,13 @@
+% =====================================================================
+\chapter{Introdução}\label{cap:introducao}
+% =====================================================================
+
+Desastres hidrometeorológicos, como inundações e deslizamentos, estão entre os eventos que mais causam mortes e prejuízos no Brasil. Em 2024, o Centro Nacional de Monitoramento e Alertas de Desastres Naturais ampliou para 1.133 a lista de municípios monitorados \parencite{cemaden2024}, e só nesses municípios foram registrados, em 2023, 815 eventos de inundação e 526 deslizamentos \parencite[p.~70]{nakano2024}. No Litoral Norte paulista, vizinho ao Vale do Paraíba, os pluviômetros registraram em fevereiro de 2023 663~mm de chuva em 24 horas em Bertioga \parencite{metsul2023}.
+
+Cabe aos municípios manter a população informada sobre áreas de risco e eventos extremos \parencite{lei12608}, e para isso a Defesa Civil depende de dados que chegam continuamente de estações em campo. Esses dados são \textbf{críticos}: se uma leitura de chuva se perde, é alterada sem registro ou chega tarde, o alerta pode não acontecer. Por isso, além de rápido, o banco de dados que os recebe precisa garantir integridade, controle de acesso, rastreabilidade e continuidade.
+
+\textbf{Problema.} Uma primeira versão do banco, feita pelo grupo, já recebia leituras em volume e gerava alarmes, mas não protegia o dado: todos os acessos usavam o superusuário, não havia registro de quem alterava regras, uma leitura com data inválida derrubava o lote inteiro e as partições mensais acabariam em dezembro de 2026, o que faria toda transmissão falhar a partir de janeiro.
+
+\textbf{Objetivo.} Projetar e prototipar um banco de dados de telemetria IoT em PostgreSQL adequado a dados críticos, com servidor e painel web, e comprovar suas garantias com testes. Especificamente: apresentar os conceitos envolvidos; levantar requisitos e modelar o sistema; implementar no banco validação, auditoria, controle de acesso e continuidade; e medir o custo dessas garantias no desempenho.
+
+\textbf{Escopo.} Foram implementados o banco de dados, um servidor em Node.js e um painel em HTML, CSS e JavaScript. O equipamento de campo e o meio de transmissão foram substituídos por um simulador que gera leituras realistas para duas estações da Defesa Civil de São José dos Campos, Centro e Zona Norte.

@@ -1,0 +1,191 @@
+% =====================================================================
+% APS - Laboratório de Projeto de Banco de Dados (UNIP São José dos Campos)
+% Banco de dados de telemetria IoT para dados críticos
+% Classe abnTeX2 (ABNT NBR 14724) + biblatex-abnt (NBR 6023 / NBR 10520)
+% Compilar: latexmk -pdf main.tex   (ou pdflatex -> biber -> pdflatex x2)
+% =====================================================================
+\documentclass[
+  12pt, oneside, a4paper,
+  english, brazil,
+  sumario=tradicional
+]{abntex2}
+
+% ---------------------------------------------------------------------
+% Pacotes
+% ---------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[scaled=0.95]{helvet}          % fonte sem serifa (padrão do grupo)
+\renewcommand{\familydefault}{\sfdefault}
+\renewcommand{\ttdefault}{txtt}        % monoespaçada mais encorpada (txfonts)
+\usepackage{microtype}
+\usepackage{csquotes}
+\setlength{\emergencystretch}{3em}
+\renewcommand{\topfraction}{0.92}\renewcommand{\bottomfraction}{0.8}\renewcommand{\textfraction}{0.06}\renewcommand{\floatpagefraction}{0.75}\setcounter{topnumber}{3}\setcounter{bottomnumber}{2}\setcounter{totalnumber}{4}
+\usepackage{indentfirst}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{siunitx}
+\sisetup{output-decimal-marker={,}, group-separator={.}, group-minimum-digits=4}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,shapes.geometric,shapes.symbols,calc,positioning}
+\usepackage{pgf-umlcd}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{listings}
+\usepackage{enumitem}
+\setlist{nosep, leftmargin=*, labelindent=\parindent}
+
+% Referências e citações: ABNT NBR 6023 e NBR 10520
+\usepackage[
+  style=abnt,
+  backend=biber,
+  justify,
+  extrayear,
+  repeatfields,
+  natbib=false,
+  noslsn
+]{biblatex}
+\input{config_citacoes}
+\addbibresource{referencias.bib}
+
+\input{cores}
+
+% ---------------------------------------------------------------------
+% Quadros (texto) separados de tabelas (dados numéricos), como pede a ABNT
+% ---------------------------------------------------------------------
+\newcommand{\quadroname}{Quadro}
+\newcommand{\listofquadrosname}{Lista de quadros}
+\newfloat[chapter]{quadro}{loq}{\quadroname}
+\newlistof{listofquadros}{loq}{\listofquadrosname}
+\newlistentry{quadro}{loq}{0}
+\setfloatadjustment{quadro}{\centering}
+\counterwithout{quadro}{chapter}
+\renewcommand{\cftquadroname}{\quadroname\space}
+\renewcommand*{\cftquadroaftersnum}{\hfill--\hfill}
+
+% numeração contínua de figuras e tabelas (NBR 14724)
+\counterwithout{figure}{chapter}
+\counterwithout{table}{chapter}
+
+% colunas de quadros/tabelas
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\renewcommand{\arraystretch}{1.25}
+
+% código SQL curto
+\renewcommand{\lstlistingname}{Código}
+\lstset{
+  basicstyle=\ttfamily\footnotesize, keywordstyle=\color{azul}\bfseries,
+  commentstyle=\color{cinza}\itshape, stringstyle=\color{verde},
+  frame=single, rulecolor=\color{cinza!50}, breaklines=true, columns=fullflexible,
+  showstringspaces=false, language=SQL, morekeywords={RETURNING,ATTACH,DETACH,PARTITION,POLICY,EXECUTE,FUNCTION,TRIGGER},
+  literate={á}{{\'a}}1 {ã}{{\~a}}1 {â}{{\^a}}1 {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {õ}{{\~o}}1 {ô}{{\^o}}1 {ú}{{\'u}}1 {ç}{{\c c}}1 {Ç}{{\c C}}1
+}
+
+% ---------------------------------------------------------------------
+% Dados do trabalho
+% ---------------------------------------------------------------------
+\titulo{Banco de dados de telemetria IoT para dados críticos: plataforma de monitoramento meteorológico para a Defesa Civil de São José dos Campos}
+\autor{%
+  RA N062576 -- Gabriel Marques\\
+  RA G8659C1 -- Gabriel Luiz Bastos Pereira\\
+  RA N050FA1 -- Diego Ferraz\\
+  RA N454830 -- Pedro Henrique de Souza Lemos\\
+  RA G773470 -- Wellington Tomiyoshi Santos Koga}
+\local{São José dos Campos}
+\data{2026}
+\orientador{Prof. Fernando Mauro}
+\instituicao{%
+  UNIP -- Universidade Paulista
+  \par
+  Curso de Engenharia da Computação}
+\tipotrabalho{Atividade Prática Supervisionada}
+\preambulo{Atividade Prática Supervisionada apresentada ao curso de Engenharia da Computação da Universidade Paulista -- UNIP, campus São José dos Campos, disciplina de Laboratório de Projeto de Banco de Dados (LPBD), como requisito parcial de avaliação.}
+
+\makeatletter
+\hypersetup{
+  pdftitle={\@title}, pdfauthor={Grupo APS LPBD}, pdfsubject={\imprimirpreambulo},
+  pdfcreator={LaTeX com abnTeX2}, pdfkeywords={banco de dados}{dados críticos}{PostgreSQL}{IoT}{auditoria},
+  colorlinks=true, linkcolor=black, citecolor=black, filecolor=black, urlcolor=azul, bookmarksdepth=4
+}
+\makeatother
+
+% espaço depois de \fonte e legenda das figuras
+\setlength{\absparsep}{18pt}
+\makeindex
+
+\begin{document}
+\selectlanguage{brazil}
+\frenchspacing
+
+% =====================================================================
+% ELEMENTOS PRÉ-TEXTUAIS
+% =====================================================================
+\pretextual
+
+% ---- Capa (identificação dos integrantes com RA na folha de rosto)
+\renewcommand{\imprimircapa}{%
+  \begin{capa}%
+    \center
+    {\ABNTEXchapterfont\large\MakeUppercase{UNIP -- Universidade Paulista}}
+    \vspace*{0.6cm}
+
+    {\large Curso de Engenharia da Computação}
+    \vspace*{1.6cm}
+
+    {\large Gabriel Marques\\Gabriel Luiz Bastos Pereira\\Diego Ferraz\\Pedro Henrique de Souza Lemos\\Wellington Tomiyoshi Santos Koga\par}
+    \vfill
+    \begin{center}
+      \ABNTEXchapterfont\bfseries\Large\imprimirtitulo
+    \end{center}
+    \vspace*{0.8cm}
+
+    {\large Atividade Prática Supervisionada}
+    \vfill
+    \large\imprimirlocal\par
+    \large\imprimirdata
+    \vspace*{1cm}
+  \end{capa}}
+\imprimircapa
+
+% ---- Folha de rosto
+\imprimirfolhaderosto
+
+% ---- Resumo e abstract
+\input{capitulos/00_resumo}
+
+% ---- Sumário
+\pdfbookmark[0]{\contentsname}{toc}
+\settocdepth{section}
+\tableofcontents*
+\cleardoublepage
+
+% =====================================================================
+% ELEMENTOS TEXTUAIS
+% =====================================================================
+\textual
+
+\input{capitulos/01_introducao}
+\input{capitulos/02_fundamentacao}
+\input{capitulos/03_arquitetura}
+\input{capitulos/04_requisitos}
+\input{capitulos/05_modelagem}
+\input{capitulos/06_prototipo}
+\input{capitulos/07_dados_criticos}
+\input{capitulos/08_resultados}
+\input{capitulos/09_conclusao}
+
+% =====================================================================
+% ELEMENTOS PÓS-TEXTUAIS
+% =====================================================================
+\postextual
+\printbibliography[title=Referências]
+
+
+
+\end{document}

@@ -1,0 +1,66 @@
+% =====================================================================
+\chapter{Modelagem do software}\label{cap:modelagem}
+% =====================================================================
+
+A modelagem usou a UML para casos de uso e classes \parencite{booch2006} e um diagrama entidade-relacionamento para o banco. Os atores são o \textbf{dispositivo} (datalogger que envia os lotes), o \textbf{visualizador} (consulta e exporta), o \textbf{operador} (também reconhece eventos e ajusta alarmes), o \textbf{administrador} (também gerencia usuários, auditoria, backups e parâmetros) e o \textbf{agendador} do servidor. A \autoref{fig:casos-uso} mostra os casos de uso; a herança entre atores representa os perfis cumulativos, e os «include» mostram que todo lote é validado e toda alteração é auditada.
+
+\begin{figure}[htb]
+  \caption{Diagrama de casos de uso}\label{fig:casos-uso}
+  \centering
+  \resizebox{0.74\textwidth}{!}{\input{figuras/casos_uso}}
+  \fonte{Elaborado pelos autores (2026).}
+\end{figure}
+
+\newcommand{\linhauc}[2]{\textbf{#1} & #2 \\ \hline}
+
+\begin{quadro}[htb]
+  \caption{Caso de uso UC01 -- Enviar lote de leituras}\label{qua:uc01}
+  \footnotesize
+  \begin{tabularx}{\textwidth}{|L{2.8cm}|Y|}
+    \hline
+    \linhauc{Ator / pré-condição}{Dispositivo; estação ativa com chave de API cadastrada.}
+    \textbf{Fluxo básico} & 1. O dispositivo envia o lote para \texttt{/api/ingest} com a chave no cabeçalho. 2. O banco identifica a estação pelo hash da chave e registra falha de transmissão se o lote atrasou. 3. Classifica cada leitura e separa as rejeitadas. 4. Grava as válidas e novas; os \textit{triggers} descartam valores fora da faixa, calculam a chuva acumulada e geram alarmes. 5. Registra a transmissão e avisa os painéis em tempo real. \\ \hline
+    \textbf{Alternativos e exceções} & Leituras repetidas são ignoradas sem gerar eventos. Leituras inválidas geram um evento \texttt{LEITURA\_REJEITADA} por motivo, e o resto do lote é gravado. Chave inválida: envio recusado e auditado. Banco fora do ar: o lote vai para a fila de contingência. \\ \hline
+    \linhauc{Regra}{A data de recebimento é sempre o relógio do servidor.}
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+\begin{quadro}[htb]
+  \caption{Caso de uso UC07 -- Auditar e verificar integridade}\label{qua:uc07}
+  \footnotesize
+  \begin{tabularx}{\textwidth}{|L{2.8cm}|Y|}
+    \hline
+    \linhauc{Ator / pré-condição}{Administrador autenticado.}
+    \textbf{Fluxo básico} & 1. O administrador abre a auditoria; a verificação roda sozinha. 2. O banco percorre a trilha em ordem, recalcula o SHA-256 de cada registro com o hash do anterior e compara com o gravado. 3. O administrador filtra por ação, objeto, usuário e período e abre o antes e depois de cada alteração. \\ \hline
+    \linhauc{Alternativo}{Registro alterado ou removido: a tela mostra o número do primeiro registro com problema.}
+    \linhauc{Regra}{A trilha é somente de inclusão; desligar essa proteção é um comando de estrutura e também é auditado.}
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+O diagrama de classes (\autoref{fig:classes}) representa o domínio. Suas operações estão no próprio banco, como funções e \textit{triggers} em PL/pgSQL: \texttt{receberLote} é \texttt{fn\_receber\_lote}, \texttt{reconhecer} é \texttt{fn\_reconhecer\_eventos} e \texttt{verificarIntegridade} é \texttt{fn\_verificar\_auditoria}.
+
+\begin{figure}[htb]
+  \caption{Diagrama de classes do domínio}\label{fig:classes}
+  \centering
+  \resizebox{0.84\textwidth}{!}{\input{figuras/classes}}
+  \fonte{Elaborado pelos autores (2026).}
+\end{figure}
+
+\section{Modelo de dados}
+
+O modelo físico tem 14 tabelas (\autoref{fig:der}), num diagrama gerado do catálogo do banco para corresponder exatamente ao implementado. A tabela \texttt{leitura} tem uma linha por estação por minuto, chave primária (\texttt{id\_dispositivo}, \texttt{data\_hora}) e partições mensais; os meses antigos são movidos inteiros para \texttt{leitura\_arquivo}, com índice BRIN, e resumidos em \texttt{leitura\_diaria}. Os eventos ficam numa tabela única, no formato de log, com cinco tipos: transmissão OK, falha de transmissão, falha de sensor, alarme e leitura rejeitada. As regras de alarme cadastradas são chuva acumulada acima de 50~mm (crítico), vento acima de 17~m/s, temperatura acima de 35~°C e umidade abaixo de 20\,\% (alerta).
+
+\begin{figure}[p]
+  \caption{Modelo de dados (diagrama entidade-relacionamento)}\label{fig:der}
+  \centering
+  \includegraphics[height=0.84\textheight,width=\textwidth,keepaspectratio]{figuras/der.pdf}
+  \fonte{Elaborado pelos autores (2026), gerado do catálogo do PostgreSQL com Graphviz.}
+\end{figure}
+
+\section{Regras implementadas no banco}
+
+Todo dado entra por \texttt{fn\_receber\_lote}, que não tem parâmetro de data: o recebimento é sempre \texttt{now()}. Numa única instrução SQL, a função lê o JSON (valores mal formatados viram nulo, sem abortar o lote), classifica cada leitura (data no futuro além de 2~min, mais antiga que 7 dias ou de mês sem partição ativa são rejeitadas), grava um evento por motivo de rejeição e insere só as leituras válidas e novas, o que corrigiu as falhas de sensor ``fantasmas'' da primeira versão. Como defesa adicional, o \textit{trigger} da tabela recusa data no futuro mesmo em inclusões diretas.
+
+Na auditoria, um \textit{trigger} define a data com o relógio do servidor, identifica o usuário pela sessão e calcula o SHA-256 do registro concatenado ao hash do anterior, sob um bloqueio que garante a ordem da corrente. Diariamente, o banco arquiva os meses antigos (\texttt{DETACH} e \texttt{ATTACH PARTITION}) e cria as partições dos dois meses seguintes.

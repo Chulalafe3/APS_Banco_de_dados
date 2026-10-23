@@ -1,0 +1,31 @@
+% =====================================================================
+\chapter{Fundamentação teórica}\label{cap:fundamentacao}
+% =====================================================================
+
+\section{Banco de dados, SGBD e modelo relacional}
+
+Um \textbf{banco de dados} é uma coleção de dados relacionados, organizada para um propósito; o \textbf{sistema gerenciador de banco de dados} (SGBD) é o software que permite defini-lo, manipulá-lo e compartilhá-lo entre aplicações e usuários \parencite{elmasri2018}. Em vez de cada programa tratar acesso concorrente, recuperação de falhas, integridade e autorização, o SGBD assume essas tarefas para todos \parencite{silberschatz2020}. Essa centralização é o ponto de partida deste trabalho: uma regra que vive só na aplicação pode ser contornada por outro programa; uma regra que vive no SGBD vale para todos.
+
+O modelo relacional representa os dados como tabelas manipuladas por operações sobre conjuntos \parencite{codd1970}. Sobre ele, o SGBD garante restrições declaradas no esquema: \textbf{chave primária} (no projeto, estação mais data e hora impede gravar a mesma leitura duas vezes), \textbf{chave estrangeira} (um sensor só pertence a uma estação existente) e \textbf{\texttt{CHECK}} (o perfil do usuário só pode ser administrador, operador ou visualizador). A tabela de leituras usa o \textbf{formato largo}, uma coluna por grandeza, que reduz linhas e simplifica consultas quando as grandezas são fixas.
+
+\section{Transações e durabilidade}
+
+Uma \textbf{transação} é uma unidade de trabalho com as propriedades ACID: atomicidade (tudo ou nada), consistência (de um estado válido a outro), isolamento (transações concorrentes não se enxergam pela metade) e durabilidade (o que foi confirmado sobrevive a falhas) \parencite{harder1983}. A durabilidade vem do registro antecipado em log (\textit{write-ahead logging}, WAL): o SGBD grava a alteração no log antes de confirmá-la e, após uma queda, refaz o que foi confirmado \parencite{mohan1992}. No PostgreSQL, esse log também permite a recuperação para qualquer instante (PITR) \parencite{pgbackup}. No projeto, receber um lote é uma transação: leituras, eventos e alarmes entram juntos ou não entram.
+
+\section{Programação no servidor e desempenho}
+
+O PostgreSQL executa lógica dentro do banco em PL/pgSQL \parencite{pgdocs}: \textbf{funções} encapsulam operações (uma função \texttt{SECURITY DEFINER} roda com os privilégios de quem a criou, liberando uma operação sem liberar a tabela); \textbf{\textit{triggers}} rodam automaticamente a cada inclusão, alteração ou exclusão, sem que a aplicação possa evitá-los; e \textbf{\textit{event triggers}} reagem a comandos de estrutura como \texttt{ALTER} e \texttt{DROP}.
+
+Para o desempenho com séries temporais \parencite{jensen2017,grzesik2020}, o projeto usa: \textbf{índice B-tree composto} (estação, data e hora), que no PostgreSQL 18 também serve a consultas só por período, graças ao \textit{skip scan} \parencite{pg18release}; \textbf{índice BRIN}, muito pequeno, para dados gravados em ordem de tempo; \textbf{particionamento mensal}, em que o banco lê só os meses consultados e move um mês inteiro para o arquivo sem copiar linhas; e \textbf{view materializada}, que guarda agregações prontas para os painéis \parencite{chirkova2012}.
+
+\section{Dados críticos e segurança da informação}\label{sec:fund-criticos}
+
+Neste trabalho, \textbf{dado crítico} é aquele cuja perda, alteração indevida, exposição ou indisponibilidade pode causar dano relevante a pessoas. A segurança da informação organiza sua proteção em \textbf{confidencialidade}, \textbf{integridade} e \textbf{disponibilidade} \parencite{iso27001}, com controles como gestão de acesso, registro de eventos e cópias de segurança \parencite{iso27002}; a LGPD exige medidas técnicas que protejam dados pessoais de acessos não autorizados \parencite{lgpd2018}. Os conceitos usados no protótipo são:
+
+\begin{itemize}
+  \item \textbf{mínimo privilégio}: cada programa e usuário opera só com os privilégios de que precisa \parencite{saltzer1975}. No banco, isso se faz com papéis distintos e com a segurança em nível de linha (\textit{Row Level Security}, RLS), que filtra quais linhas cada usuário vê \parencite{pgrls};
+  \item \textbf{senhas com bcrypt}: função de hash propositalmente lenta e com \textit{salt}, que dificulta ataques de força bruta \parencite{provos1999};
+  \item \textbf{auditoria à prova de adulteração}: cada registro guarda o hash do anterior, de modo que alterar ou apagar um registro quebra a corrente e se torna detectável \parencite{schneier1999,haber1991};
+  \item \textbf{RPO e RTO}: quanto dado se aceita perder e em quanto tempo o serviço deve voltar após uma falha \parencite{nist80034};
+  \item \textbf{segurança da aplicação web}: proteção contra controle de acesso quebrado e injeção de SQL e de scripts (XSS), as falhas mais comuns segundo a OWASP \parencite{owasp2021}.
+\end{itemize}

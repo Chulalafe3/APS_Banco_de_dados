@@ -1,0 +1,79 @@
+% Diagrama de classes do domínio (pgf-umlcd)
+\begin{tikzpicture}[font=\scriptsize]
+\begin{class}[text width=3.3cm]{Cliente}{0,0}
+  \attribute{nome : texto}
+  \attribute{cidade : texto}
+  \attribute{uf : texto}
+\end{class}
+
+\begin{class}[text width=4.3cm]{Dispositivo}{5.2,0}
+  \attribute{nome : texto}
+  \attribute{status : Status}
+  \attribute{ultimaComunicacao : data/hora}
+  \attribute{intervaloTransmissao : int}
+  \operation{+ receberLote(leituras) : int}
+  \operation{+ verificarComunicacao()}
+\end{class}
+
+\begin{class}[text width=3.6cm]{Usuario}{0,-4.0}
+  \attribute{login : texto}
+  \attribute{senhaHash : bcrypt}
+  \attribute{perfil : Perfil}
+  \attribute{bloqueadoAte : data/hora}
+  \operation{+ login(senha) : Sessao}
+  \operation{+ alterarSenha(atual, nova)}
+\end{class}
+
+\begin{class}[text width=3.5cm]{Sessao}{0,-8.1}
+  \attribute{tokenHash : SHA-256}
+  \attribute{expiraEm : data/hora}
+  \operation{+ validar() : Usuario}
+\end{class}
+
+\begin{class}[text width=3.6cm]{Sensor}{10.6,1.0}
+  \attribute{parametro : texto}
+  \attribute{limiteMin, limiteMax : num}
+  \operation{+ valida(valor) : bool}
+\end{class}
+
+\begin{class}[text width=3.6cm]{RegraAlarme}{10.6,-2.3}
+  \attribute{parametro : texto}
+  \attribute{condicao : ACIMA/ABAIXO}
+  \attribute{limite : num}
+  \attribute{nivel : Nivel}
+  \operation{+ violada(valor) : bool}
+\end{class}
+
+\begin{class}[text width=3.9cm]{Leitura}{5.2,-4.0}
+  \attribute{dataHora : data/hora}
+  \attribute{temperatura, umidade : num}
+  \attribute{chuva, chuvaAcumulada : num}
+  \attribute{vento, direcao, radiacao : num}
+  \attribute{recebidoEm : data/hora}
+\end{class}
+
+\begin{class}[text width=3.6cm]{Evento}{5.2,-8.0}
+  \attribute{dataHora : data/hora}
+  \attribute{tipo : TipoEvento}
+  \attribute{mensagem : texto}
+  \attribute{reconhecidoEm : data/hora}
+  \operation{+ reconhecer()}
+\end{class}
+
+\begin{class}[text width=4.4cm]{Auditoria}{10.6,-7.0}
+  \attribute{dataHora, login, ip}
+  \attribute{acao, antes, depois}
+  \attribute{hashAnterior, hash}
+  \operation{+ verificarIntegridade() : bool}
+\end{class}
+
+\association{Cliente}{}{1}{Dispositivo}{}{0..*}
+\association{Cliente}{}{0..1}{Usuario}{}{0..*}
+\composition{Usuario}{}{1}{Sessao}{0..*}
+\composition{Dispositivo}{}{1}{Sensor}{1..*}
+\composition{Dispositivo}{}{1}{RegraAlarme}{0..*}
+\composition{Dispositivo}{}{1}{Leitura}{0..*}
+\association{RegraAlarme}{gera}{0..1}{Evento}{}{0..*}
+\association{Leitura}{origina}{1}{Evento}{}{0..*}
+\association{Usuario}{reconhece}{0..1}{Evento}{}{0..*}
+\end{tikzpicture}

@@ -1,0 +1,9 @@
+% =====================================================================
+\chapter{Conclusão}\label{cap:conclusao}
+% =====================================================================
+
+O trabalho atingiu o objetivo de projetar e prototipar um banco de dados de telemetria IoT adequado a dados críticos. A primeira versão já recebia leituras em volume e gerava alarmes, mas não protegia o dado contra perda, adulteração e acesso indevido; as melhorias fecharam essas lacunas e foram comprovadas por testes.
+
+Três conclusões se destacam. Primeiro, \textbf{as garantias de um dado crítico devem ficar no banco}: validação, imutabilidade, perfis, isolamento por cliente e auditoria valem para qualquer programa, e o servidor web tratado como invadido não leu nada sem um \textit{token} válido. Segundo, \textbf{rastreabilidade só vale se for verificável}: a auditoria encadeada por hash apontou o registro exato alterado pelo próprio superusuário. Terceiro, \textbf{segurança tem custo mensurável e controlável}: menos de 4\,\% no envio em lotes, com as consultas mantendo ganhos de até 200 vezes.
+
+Para a Defesa Civil, cada leitura chega validada e com data confiável, uma estação que para de transmitir é identificada, uma chuva acima do limite gera alarme no mesmo minuto, e nada se perde se o banco cair por algumas horas. As principais limitações são os dados simulados e de pequeno volume, o formato largo, que exige alterar a tabela para um novo tipo de sensor, e os testes em um único computador. Como trabalhos futuros, ficam: ativar o arquivamento do WAL e uma réplica; publicar o último hash da auditoria fora do servidor; usar HTTPS e autenticação em dois fatores; conectar uma estação real; e enviar alertas automáticos à população e às equipes.

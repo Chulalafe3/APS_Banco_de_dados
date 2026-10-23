@@ -1,0 +1,41 @@
+\section{Requisitos funcionais e não funcionais}\label{cap:requisitos}
+
+Requisitos funcionais descrevem os serviços do sistema; não funcionais restringem o sistema como um todo, como segurança e desempenho \parencite{sommerville2018}. Com dados críticos, os não funcionais pesam tanto quanto os funcionais: um sistema que gera o alarme certo mas perde dados numa queda não serve ao seu propósito \parencite{pressman2021}. Os quadros a seguir listam os requisitos levantados.
+
+\begin{quadro}[htb]
+  \caption{Requisitos funcionais}\label{qua:rf}
+  \footnotesize
+  \begin{tabularx}{\textwidth}{|c|Y|}
+    \hline
+    \textbf{ID} & \textbf{Descrição} \\ \hline
+    RF01 & Receber lotes de leituras em JSON, identificando a estação por chave própria. \\ \hline
+    RF02 & Validar cada leitura (data ausente, inválida, futura, antiga ou de mês arquivado) sem descartar o restante do lote. \\ \hline
+    RF03 & Usar somente o relógio do servidor em toda data de registro; nenhum usuário digita data. \\ \hline
+    RF04 & Detectar falhas de sensor e de transmissão, calcular a chuva do dia e gerar alarmes pelas regras configuradas. \\ \hline
+    RF05 & Exibir painel em tempo real, gráficos, chuva por dia, histórico e exportação em CSV. \\ \hline
+    RF06 & Permitir ao operador reconhecer eventos, registrando automaticamente quem e quando. \\ \hline
+    RF07 & Permitir ajustar regras de alarme e faixas dos sensores (operador) e parâmetros do banco (administrador). \\ \hline
+    RF08 & Gerenciar usuários com perfis, troca de senha no primeiro acesso e desbloqueio. \\ \hline
+    RF09 & Auditar alterações, logins, exportações, backups e mudanças de estrutura, com antes e depois. \\ \hline
+    RF10 & Verificar a integridade da auditoria e apontar o primeiro registro adulterado. \\ \hline
+    RF11 & Fazer backup diário e sob demanda, verificar cada cópia e permitir a restauração. \\ \hline
+    RF12 & Arquivar meses antigos e criar com antecedência as partições dos meses seguintes. \\ \hline
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+\begin{quadro}[htb]
+  \caption{Requisitos não funcionais}\label{qua:rnf}
+  \footnotesize
+  \begin{tabularx}{\textwidth}{|c|L{2.6cm}|Y|}
+    \hline
+    \textbf{ID} & \textbf{Categoria} & \textbf{Descrição} \\ \hline
+    RNF01 & Integridade & Regras implementadas no banco, que nenhuma aplicação contorna; eventos imutáveis. \\ \hline
+    RNF02 & Confidencialidade & Papéis de mínimo privilégio, isolamento por cliente, senhas com bcrypt, sessões guardadas só como hash. \\ \hline
+    RNF03 & Rastreabilidade & Auditoria somente de inclusão, encadeada por hash, que torne detectável qualquer alteração. \\ \hline
+    RNF04 & Disponibilidade & Nenhuma leitura perdida com o banco fora do ar; perda máxima de 24 h com backup diário. \\ \hline
+    RNF05 & Desempenho & Painel atualizado segundos após o lote; validações sem impacto relevante no envio em lote. \\ \hline
+    RNF06 & Segurança web e portabilidade & Consultas parametrizadas, proteção contra CSRF e XSS; Windows e Linux com software livre. \\ \hline
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}

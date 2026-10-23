@@ -1,0 +1,89 @@
+% =====================================================================
+\chapter{Resultados e discussão}\label{cap:resultados}
+% =====================================================================
+
+Os testes foram executados em Linux (Ubuntu 24.04), com PostgreSQL 16.15 e Node.js 22, sempre sobre um banco recriado do zero.
+
+\section{Carga e detecção de eventos}
+
+A carga gerou 529.250 leituras de seis meses, com todas as validações ativas. O arquivamento manteve os dois meses mais recentes na tabela principal (149.090 leituras), moveu os anteriores para o arquivo (380.160) e gerou 264 dias de resumo. Foram registrados, nas estações Centro e Zona Norte, respectivamente, \num{25928} e \num{25955} transmissões OK, 523 e 501 falhas de transmissão, \num{1280} e \num{1358} falhas de sensor e 16 e 17 alarmes, valores próximos das taxas simuladas. No dia de temporal, as duas estações geraram alarme de vento e alarme crítico de chuva, e a chuva acumulada pelo \textit{trigger} coincidiu com a soma das leituras.
+
+
+\section{Testes de segurança e continuidade}
+
+Os testes de segurança (\autoref{qua:testes-seg}) usaram o papel do servidor web (\texttt{aps\_app}), como faria um invasor que tivesse tomado o servidor, e a API do painel. Todos tiveram o resultado esperado; o S12 mostra que nem o superusuário altera o passado sem ser percebido.
+
+\begin{quadro}[htb]
+  \caption{Testes de segurança e integridade}\label{qua:testes-seg}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{|c|Y|Y|}
+    \hline
+    \textbf{ID} & \textbf{Tentativa} & \textbf{Resultado} \\ \hline
+    S01 & Consultar dados sem sessão & Nenhuma linha visível (RLS) \\ \hline
+    S02 & Usar \textit{token} de sessão falso & Nenhuma linha; ações recusadas \\ \hline
+    S03 & Operador lê usuários e auditoria & Permissão negada; zero linhas \\ \hline
+    S04 & Operador altera limite de alarme (permitido) & Gravado e auditado com antes, depois, usuário e IP \\ \hline
+    S05 & Operador altera parâmetro de administrador & Nenhuma linha afetada \\ \hline
+    S06 & Aplicação grava leitura direto, apaga evento ou informa data & Permissão negada nas três \\ \hline
+    S07 & Superusuário inclui leitura com data no futuro & Recusada pelo \textit{trigger} \\ \hline
+    S08 & Lote com seis leituras, cinco com datas inválidas & 1 gravada; 5 rejeitadas em 3 eventos por motivo \\ \hline
+    S09 & Virada de mês sem partição & Manutenção cria o mês atual e os dois seguintes \\ \hline
+    S10 & Alterar evento ou desfazer reconhecimento & Recusado: evento imutável \\ \hline
+    S11 & Senha errada repetidas vezes & Bloqueio de 15 min na 5ª tentativa \\ \hline
+    S12 & Superusuário desliga a proteção e altera a auditoria & Verificação aponta o registro exato; o desligamento fica registrado \\ \hline
+    S13 & Apagar registro da auditoria & Recusado: somente inclusão \\ \hline
+    S14 & Requisição sem o cabeçalho do painel (CSRF) & Recusada (HTTP 403) \\ \hline
+    S15 & Reenviar lote já gravado com $-9999$ & Nenhum evento novo (antes, falha de sensor) \\ \hline
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+\begin{quadro}[htb]
+  \caption{Testes de continuidade}\label{qua:testes-cont}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{|c|Y|Y|}
+    \hline
+    \textbf{ID} & \textbf{Cenário} & \textbf{Resultado} \\ \hline
+    C1 & Banco desligado durante envios & Lotes aceitos (HTTP 202) na fila e reenviados em segundos ao religar; painel avisou a queda \\ \hline
+    C2 & Backup sob demanda e verificação & 35,6~MB em 10,5~s; SHA-256 conferido; 450 objetos legíveis \\ \hline
+    C3 & Restauração em banco novo & Mesmas contagens (149.162, 380.160 e 55.547) e auditoria íntegra \\ \hline
+    C4 & Servidor parado por uma hora & Leituras recuperadas; falha de transmissão de 59 min registrada \\ \hline
+  \end{tabularx}
+  \fonte{Elaborado pelos autores (2026).}
+\end{quadro}
+
+Com backup diário, a perda máxima no banco (RPO) é de 24 horas, mas na prática é menor, pois as estações guardam as leituras e o banco aceita reenvios de até sete dias; a restauração (RTO) leva minutos. O arquivamento contínuo do WAL reduziria o RPO a minutos \parencite{pgbackup}.
+
+\section{Desempenho e custo das validações}
+
+Na escrita de 1.000 pontos (média de 20 repetições), comparando a primeira versão e a final, o envio de um ponto por vez passou de 946,8 para 1.245,8~ms ($+31{,}6\,\%$), e o envio em lotes de dez, de 226,9 para 235,3~ms ($+3{,}7\,\%$). As validações são feitas uma vez por lote, por isso o custo se dilui no envio em lotes, modo de operação das estações, 5,3 vezes mais rápido que o unitário, como observado por \textcite{grzesik2020}.
+
+
+\begin{figure}[htb]
+  \caption{Tempo médio das consultas por cenário (500 repetições, escala logarítmica)}\label{fig:consultas}
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=0.92\textwidth, height=4.8cm,
+      ybar, bar width=9pt, area legend, ymode=log, log origin=infty,
+      ymin=0.08, ymax=150,
+      symbolic x coords={Q1,Q2,Q3,Q4},
+      xtick=data, enlarge x limits=0.18,
+      ylabel={tempo médio (ms)},
+      ylabel style={font=\footnotesize}, tick label style={font=\footnotesize},
+      log ticks with fixed point, yticklabel style={/pgf/number format/use comma},
+      legend style={font=\scriptsize, at={(0.5,1.03)}, anchor=south, legend columns=4, draw=none},
+      ymajorgrids, grid style={cinza!25},
+      axis line style={cinza},
+    ]
+      \addplot[fill=cinza!70, draw=none]   coordinates {(Q1,28.82) (Q2,31.34) (Q3,32.76) (Q4,63.31)};
+      \addplot[fill=azul!55, draw=none]    coordinates {(Q1,0.45) (Q2,34.41) (Q3,33.42) (Q4,11.00)};
+      \addplot[fill=verde!70, draw=none]   coordinates {(Q1,0.38) (Q2,6.54) (Q3,7.91) (Q4,11.10)};
+      \addplot[fill=azul, draw=none]       coordinates {(Q2,0.16) (Q3,0.18)};
+      \legend{A sem índice, B índice composto, C particionada, D view materializada}
+    \end{axis}
+  \end{tikzpicture}
+  \fonte{Elaborada pelos autores (2026). Q1: uma estação em 1 dia; Q2 e Q3: médias, mínimos e máximos de 7 dias; Q4: vento por dia em 30 dias.}
+\end{figure}
+
+Nas consultas (\autoref{fig:consultas}), o índice composto foi o melhor para uma estação (Q1, 64 vezes mais rápida), a view materializada foi de 185 a 200 vezes mais rápida nas agregações de vários dias (Q2 e Q3) e o particionamento reduziu o tempo de 4 a 6 vezes. Ler a chuva acumulada foi 4,3 vezes mais rápido que somar as leituras do dia. No PostgreSQL 18, o índice composto também acelerou Q2 e Q3 de 5 a 6,6 vezes, graças ao \textit{skip scan} \parencite{pg18release}.

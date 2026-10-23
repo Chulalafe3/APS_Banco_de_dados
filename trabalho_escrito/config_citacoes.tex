@@ -1,0 +1,17 @@
+% ---------------------------------------------------------------------
+% Citações conforme ABNT NBR 10520:2023
+% - sobrenome em maiúsculas e minúsculas também dentro dos parênteses:
+%   (Sommerville, 2018), e não (SOMMERVILLE, 2018)
+% - siglas de entidades continuam em maiúsculas: (CEMADEN, 2024)
+% - referências seguem com o SOBRENOME em maiúsculas (NBR 6023:2025)
+% O biblatex-abnt aplica a caixa alta nas citações pela macro
+% \UpperOrSCCite; aqui ela passa a manter o nome como está.
+% ---------------------------------------------------------------------
+\makeatletter
+\AtEndPreamble{\renewcommand*{\UpperOrSCCite}[1]{#1}}
+\makeatother
+% "et al." em itálico (NBR 10520:2023, 4 ou mais autores)
+\DefineBibliographyStrings{brazil}{andothers = {\mkbibemph{et al\adddot}}}
+
+% DOI como endereço completo (ABNT NBR 6023:2025)
+\DeclareFieldFormat{doi}{DOI: \url{https://doi.org/#1}}
